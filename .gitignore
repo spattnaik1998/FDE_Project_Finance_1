@@ -1,0 +1,37 @@
+# --- Secrets: never commit ---------------------------------------------
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# --- Python ------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# --- Data: regenerable from the source APIs, and large ------------------
+# Everything here is reproducible via scripts/fetch_all.py and
+# scripts/fetch_documents.py, and data/docs holds third-party PDFs and
+# spreadsheets that are not ours to redistribute.
+data/raw/
+data/interim/
+data/docs/
+
+# --- Reference material: third-party or personal, excluded by default ---
+# Book reading notes and the sample TDD are inputs, not project artefacts.
+# Remove these lines deliberately if they should be published.
+*.pdf
+!docs/**/*.pdf
+
+# --- Screenshots containing host or account detail ----------------------
+Diagrams/Windows_Authentication.png
+
+# --- Local tooling ------------------------------------------------------
+.vscode/
+.idea/
+*.log
