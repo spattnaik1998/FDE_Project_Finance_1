@@ -297,3 +297,49 @@ Still blocked on environment, both needing your go-ahead:
    Needed for P3, not P1/P2.
 
 Next: P2, the deterministic scoring service. It needs neither prerequisite.
+
+---
+
+## W1 complete — warehouse loader (2026-09-20)
+
+17,004 facts loaded; 104 tests pass. Branch `feat/p1-warehouse-loader`.
+
+| Table | Rows |
+|---|---|
+| `ref.source_document` | 29 |
+| `core.task` | 26 |
+| `core.exposure_estimate` | 774 |
+| `core.adoption_observation` | 126 |
+| `core.extracted_claim` | 21 |
+| `core.industry_metric` | 16,057 |
+
+**Append-only proven, not asserted.** A revised artefact becomes a new
+`source_doc_id` with new rows; the prior rows survive verbatim and stay
+resolvable. Re-running the loader against the real warehouse inserted 0 rows
+and skipped 17,004 — idempotency on source hash + natural key holds in
+production, not just in fixtures.
+
+Design notes worth keeping:
+- `registry._upsert_document` keys idempotency on **SHA-256, not doc_id**, so
+  identical bytes under two names are one artefact and changed bytes under one
+  name are two versions. Content addressing, as the architect argued.
+- `_demote_superseded` demotes rather than deletes, so `VW_*` shows the latest
+  version while history stays queryable for a past run.
+- `weight_source` is written as `equal` on every task, making the aggregation
+  convention explicit in the data rather than implicit in the code.
+
+**What the tests revealed:** seven of ten quality assertions are also enforced
+by a CHECK or FK, so the bad row cannot be inserted at all — for those the
+constraint is the real guarantee and the assertion is defence in depth. Three
+carry weight on their own: run-on quote detection, duplicate current versions,
+and views exposing `Source_Doc_ID`. Stated in the README rather than left as an
+implied "10 checks all passing".
+
+**Honest gap:** mixed-mode auth is still off, so the loader runs as the
+developer rather than `USR_FDE_LOAD`. `session.py` warns on every run and
+`test_integration.py` asserts the isolation is *not* in force. It inverts when
+mixed mode is enabled.
+
+Next: W2, the deterministic scoring service. The independence test — asserting
+the lag path cannot read the exposure result — gets written before the lag
+model, not after.

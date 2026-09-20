@@ -103,7 +103,7 @@ where fabricated citations come from, so extraction here is purely mechanical.
 - **Two AIOE files are third-party mirrors**, not the publisher's copies, and
   are flagged as such in the provenance ledger.
 
-## Database (P1 — complete)
+## Database and warehouse loader (P1 — complete)
 
 SQL Server `FDE_TaskExposure` on `LAPTOP-FO95TROJ`. DDL is version-controlled
 and idempotent; re-running rebuilds rather than migrates.
@@ -134,6 +134,55 @@ caveats, inverted lag intervals, suppressed-cell-with-a-value, sub-20-character
 quotes, unprovenanced facts, unexplained calibration disagreement, and
 UPDATE/DELETE on the audit log.
 
+### Loading
+
+```bash
+python scripts/load_warehouse.py   # landing zone + corpus -> SQL Server
+python -m pytest                   # 104 tests
+```
+
+Facts are **append-only** and content-addressed. Idempotency keys on source
+hash plus natural key, so re-running the loader inserts nothing; a *revised*
+artefact becomes a new `ref.source_document` row with new facts, and the prior
+rows stay exactly as the run that consumed them saw. `is_current` is demoted
+rather than deleted, so the `VW_*` views show the latest version while history
+remains queryable.
+
+| Table | Rows |
+|---|---|
+| `ref.source_document` | 29 (9 documents + 20 API datasets) |
+| `core.task` | 26 |
+| `core.exposure_estimate` | 774 |
+| `core.adoption_observation` | 126 |
+| `core.extracted_claim` | 21 |
+| `core.industry_metric` | 16,057 |
+
+Ten blocking quality assertions run after every load and record their outcome
+in `audit.quality_assertion` — pass or fail, so a load that silently degraded
+is distinguishable from one that never ran.
+
+### Test suite
+
+104 tests across six files, against an isolated `FDE_TaskExposure_Test`
+database rebuilt from the production DDL (a test schema that drifts from the
+real one proves nothing about the real one).
+
+| File | Covers |
+|---|---|
+| `test_loaders.py` | Idempotency, revision handling, suppressed cells, percentile computation |
+| `test_registry.py` | SHA-256 content addressing, version detection, digest drift |
+| `test_quality.py` | Every assertion driven to failure deliberately |
+| `test_guardrails.py` | Structural claims the TDD makes, each violated on purpose |
+| `test_views.py` | The five-view agent surface and its guarantees |
+| `test_integration.py` | The real loaded warehouse against the exploration's findings |
+
+Worth noting what the quality tests revealed: seven of the ten assertions are
+*also* enforced by a CHECK or FOREIGN KEY constraint, so the bad row cannot be
+inserted at all. For those the constraint is the real guarantee and the
+assertion is defence in depth. Three — run-on quote detection, duplicate
+current versions, and views exposing `Source_Doc_ID` — have no constraint
+behind them and carry real weight on their own.
+
 ### Environment prerequisites not yet met
 
 1. **Mixed-mode authentication is disabled.** The four SQL logins cannot be
@@ -141,6 +190,12 @@ UPDATE/DELETE on the audit log.
    service restart affecting the instance's other 26 databases.
 2. **Full-Text Search is not installed.** Needed for `VW_CLAIM_EVIDENCE`
    retrieval in P3, not for P1 or P2.
+
+Because of (1) the loader currently runs under the developer's trusted
+connection rather than `USR_FDE_LOAD`. `session.py` logs this at WARNING on
+every run, and `test_integration.py` asserts the isolation is *not* in force
+rather than passing silently — the security model is built and constrained, but
+untested at runtime until mixed mode is enabled.
 
 ## Known data limitations
 
