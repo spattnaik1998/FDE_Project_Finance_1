@@ -352,6 +352,63 @@ Retries 408/409/425/429 and 5xx with exponential backoff plus jitter; raises
 immediately on any other 4xx, because a 400 will be 400 again. `run_id` and
 `stage` travel on every call through `CallContext` and appear in every log line.
 
+## Tool surface (W4 — complete)
+
+Six read tools over five views. The agent's entire data surface, and the point
+at which provenance stops being a convention.
+
+| Tool | Returns |
+|---|---|
+| `get_tasks(soc_code)` | Task statements + weighting convention. **Refuses** an unknown occupation rather than substituting a neighbour |
+| `get_exposure_benchmarks(soc_code, measure?)` | Published indices, always with `Scale_Note` |
+| `get_adoption_curve(sector, question?, answer?, include_suppressed?)` | Diffusion trajectory. Suppressed cells are NULL, never zero |
+| `search_claims(topic?, text?, limit?)` | Verbatim quote + page + publisher + mirror status |
+| `get_industry_metric(series_id, industry?, start?, end?)` | One economic series |
+| `get_source_document(doc_id)` | Digest, publisher, mirror status — registers no consumption |
+
+### Three properties enforced, not assumed
+
+**Scope.** `ALLOWED_VIEWS` is a whitelist checked before execution, so a tool
+cannot be made to read a base table even by a caller that wants it to. A
+second test parses `evidence.py` with `ast` and fails if any tool SQL names a
+base table.
+
+**Provenance.** Every row carries `Source_Doc_ID`, and a row without one raises
+`ProvenanceMissing` rather than being returned — it could otherwise appear in
+an output with no traceable origin.
+
+**Consumption.** `ConsumptionTracker` records sources when a tool *returns* a
+row carrying them. That operational definition is stated explicitly in the
+module: a stricter reading (what the model demonstrably reasoned over) is
+unobservable, a looser one binds the whole warehouse, and returned-to-the-caller
+is the narrowest boundary that can be measured. A tool returning zero rows
+binds nothing.
+
+### The audit adapter
+
+`AuditAdapter` holds `USR_FDE_AUDIT` and is the only thing in the system that
+writes to `audit.AgentAuditLog`. **No orchestration node holds a write
+credential of any kind** — nodes call `emit`, the adapter owns the connection.
+`tool_raw_output` is stored unmodified so a disputed figure is attributable to
+the evidence or to the reasoning over it.
+
+### Control run through the tool surface
+
+`scripts/run_scoring.py` now reads through the same six tools the agent will
+use, so the binding and audit trail are exercised now rather than first
+appearing in W5:
+
+```
+EXPOSURE index   0.541          sensitivity 0.498 – 0.584
+LAG years        p10 5.0 | p50 10.1 | p90 30.0
+Sources bound:   4 bindings across 4 distinct sources
+Audit entries:   6
+```
+
+`search_claims` falls back to `LIKE` because Full-Text Search is not installed,
+and **says so in the result** — "lexically different phrasings of the same
+idea will be missed." Adequate at 21 claims, not beyond.
+
 ## Known data limitations
 
 These constrain what the prototype may claim, and are repeated in the report:

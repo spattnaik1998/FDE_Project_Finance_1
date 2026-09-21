@@ -312,6 +312,29 @@ def test_anthropic_refusal_raises(monkeypatch):
         AnthropicProvider("k", "claude-opus-5").complete("hi")
 
 
+def test_anthropic_empty_text_on_budget_exhaustion_raises(monkeypatch):
+    """A reasoning model can spend its whole budget thinking and return nothing.
+
+    Observed live with claude-opus-5 at max_tokens=16: reasoning_tokens equalled
+    output_tokens and text was None. Returning that silently would surface
+    later as a mysteriously empty answer.
+    """
+    payload = anthropic_response(text=None, stop_reason="max_tokens")
+    payload["usage"]["output_tokens_details"] = {"thinking_tokens": 16}
+    patch_http(monkeypatch, FakeResponse(200, payload))
+    with pytest.raises(ModelRefused, match="budget was exhausted"):
+        AnthropicProvider("k", "claude-opus-5").complete("hi", max_tokens=16)
+
+
+def test_anthropic_truncated_but_non_empty_text_is_returned(monkeypatch):
+    """Truncation is not the same as no answer; a partial reply still returns."""
+    patch_http(monkeypatch, FakeResponse(
+        200, anthropic_response(text="ready", stop_reason="max_tokens")))
+    result = AnthropicProvider("k", "claude-opus-5").complete("hi", max_tokens=16)
+    assert result.text == "ready"
+    assert result.stop_reason == "max_tokens"
+
+
 def test_anthropic_passes_system_at_the_top_level(monkeypatch):
     fake = patch_http(monkeypatch, FakeResponse(
         200, anthropic_response(text="hi", stop_reason="end_turn")))

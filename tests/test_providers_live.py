@@ -94,7 +94,15 @@ def test_anthropic_forced_tool_use_returns_a_schema_valid_object(anthropic_provi
 
 @needs_anthropic
 def test_anthropic_plain_completion_works(anthropic_provider):
-    result = anthropic_provider.complete("Reply with one word: ready.", max_tokens=16)
+    """Budget sized for a reasoning model.
+
+    At max_tokens=16 this failed intermittently: the model spent the whole
+    budget on thinking and returned no content. That is now an explicit error
+    in the adapter rather than a None slipping through, and the live test uses
+    a budget it can actually answer within.
+    """
+    result = anthropic_provider.complete("Reply with one word: ready.",
+                                         max_tokens=256)
     assert result.text
     assert result.stop_reason in ("end_turn", "max_tokens")
 
@@ -123,7 +131,7 @@ def test_ledger_accumulates_across_providers(openai_provider, anthropic_provider
     from providers.accounting import Ledger
 
     ledger = Ledger(run_id="live-smoke")
-    ledger.record(anthropic_provider.complete("Say ready.", max_tokens=16),
+    ledger.record(anthropic_provider.complete("Say ready.", max_tokens=256),
                   stage="review_gate")
     ledger.record(openai_provider.complete("Say ready.", max_tokens=400),
                   stage="task_classifier")

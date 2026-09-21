@@ -111,13 +111,28 @@ class AnthropicProvider(ModelProvider):
                                f"(stop_reason={stop})", provider=self.name)
 
         usage = self._usage(raw)
+        text = self._text(raw)
+
+        # A reasoning model can spend its entire token budget thinking and
+        # return no content at all -- observed with claude-opus-5 at
+        # max_tokens=16, where reasoning_tokens equalled output_tokens. Handing
+        # the caller text=None would surface later as a mysteriously empty
+        # answer, so it is raised here with the cause named. This matches what
+        # the structured path already does.
+        if text is None and stop == "max_tokens":
+            raise ModelRefused(
+                f"{self.name}: no content returned -- the token budget was "
+                f"exhausted before any output (max_tokens={max_tokens}, "
+                f"reasoning_tokens={usage.reasoning_tokens}). Raise max_tokens.",
+                provider=self.name)
+
         ctx = context or CallContext()
         LOG.info("provider=%s stage=%s model=%s status=ok tokens_in=%s tokens_out=%s "
                  "duration_ms=%s run_id=%s", self.name, ctx.stage, self.model,
                  usage.input_tokens, usage.output_tokens, duration_ms, ctx.run_id)
 
         return ModelResponse(provider=self.name, model=self.model,
-                             text=self._text(raw), structured=None, usage=usage,
+                             text=text, structured=None, usage=usage,
                              duration_ms=duration_ms, stop_reason=stop, raw=raw)
 
     def structured(self, prompt: str, schema: dict, *, schema_name: str,
