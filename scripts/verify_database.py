@@ -7,6 +7,13 @@ back, so the schema is left clean.
 
 A guardrail that cannot be demonstrated failing is a guardrail nobody should
 trust.
+
+**Relationship to ``tests/test_guardrails.py``:** the checks overlap, and that
+is deliberate rather than duplication. This script runs against the *production*
+database, so it verifies the schema real data sits in; the test suite runs
+against ``FDE_TaskExposure_Test``, rebuilt from the DDL each session. A drift
+between the two -- production patched by hand, say -- shows up here and nowhere
+else.
 """
 
 from __future__ import annotations

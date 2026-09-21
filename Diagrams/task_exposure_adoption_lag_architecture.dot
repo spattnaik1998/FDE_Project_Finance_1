@@ -5,7 +5,7 @@ digraph G {
     pad="0.25",
     nodesep="0.35",
     ranksep="0.55",
-    splines=ortho,
+    splines=polyline,
     fontname="Arial",
     fontsize=18,
     label="Task Exposure & Adoption Lag Assistant — Architecture",
@@ -89,6 +89,10 @@ digraph G {
 
       audit [label="audit.AgentAuditLog\nAPPEND-ONLY\nTool_Raw_Output stored unmodified\nDENY UPDATE/DELETE + blocking trigger", fillcolor="#F3E8FF", color="#9333EA"];
 
+      binding [label="audit.run_source_binding\nrun_id -> source_doc_id -> usage_type\nbound on CONSUMPTION, not availability\ndoc_id IS the version: no source_version column", fillcolor="#F3E8FF", color="#9333EA"];
+
+      adapter [label="Local Audit Adapter\nholds USR_FDE_AUDIT\nINSERT on the log ONLY\nno orchestration node holds a write credential", shape=component, fillcolor="#FDF4FF", color="#9333EA"];
+
       score [label="score.*\nrun • task_score • role_verdict • calibration", fillcolor="#FAF5FF", color="#9333EA"];
 
       landing [label="LANDING ZONE\ndata/raw • data/docs\nSHA-256 digest per artefact\nprovenance_note • retrieved_at", fillcolor="#F8FAFC", color="#475569"];
@@ -102,16 +106,18 @@ digraph G {
       lag -> score [label="INSERT lag outputs\nUSR_FDE_SCORE", color="#D97706", fontcolor="#92400E"];
       score -> gate [label="persisted outputs"];
 
-      ingest -> base [label="INSERT / UPDATE ref.*, core.*\nUSR_FDE_LOAD"];
+      ingest -> base [label="INSERT (append-only) ref.*, core.*\nidempotent on SHA-256 + natural key\nUSR_FDE_LOAD"];
       landing -> ingest [label="typed load"];
 
-      intent -> audit [label="write", color="#9333EA"];
-      retrieve -> audit [label="write", color="#9333EA"];
-      classify -> audit [label="write", color="#9333EA"];
-      exposure -> audit [label="write", color="#9333EA"];
-      lag -> audit [label="write", color="#9333EA"];
-      gate -> audit [label="write", color="#9333EA"];
-      synth -> audit [label="write", color="#9333EA"];
+      intent -> adapter [label="emit", color="#9333EA", style=dotted];
+      retrieve -> adapter [label="emit", color="#9333EA", style=dotted];
+      classify -> adapter [label="emit", color="#9333EA", style=dotted];
+      exposure -> adapter [label="emit", color="#9333EA", style=dotted];
+      lag -> adapter [label="emit", color="#9333EA", style=dotted];
+      gate -> adapter [label="emit", color="#9333EA", style=dotted];
+      synth -> adapter [label="emit", color="#9333EA", style=dotted];
+      adapter -> audit [label="INSERT\nUSR_FDE_AUDIT", color="#9333EA", penwidth=2];
+      score -> binding [label="sources consumed\nUSR_FDE_SCORE", color="#9333EA", style=dashed];
     }
 
     firewall [label="Windows Firewall\nINBOUND 1433 BLOCKED\nSQL Server bound to 127.0.0.1 only", shape=note, fillcolor="#F1F5F9", color="#64748B"];
@@ -132,7 +138,7 @@ digraph G {
   synth -> models [label="HTTPS egress only", color="#2563EB"];
   sources -> landing [label="HTTPS egress fetch\n(no serving dependency)", dir=back, color="#2563EB"];
 
-  provenance [label="TRACEABILITY GUARANTEE\nCustomer figure → score.* → core.* → ref.source_document → SHA-256 hashed source artefact\nProse claim → Claim_ID → verbatim Quote + Page + Publisher", shape=box, style="rounded,filled", fillcolor="#EEF2FF", color="#4F46E5", penwidth=2];
+  provenance [label="TRACEABILITY GUARANTEE\nCustomer figure → score.* → run/source binding → immutable core.* / ref.source_document → SHA-256 artefact\nProse claim → Claim_ID → verbatim Quote + Page + Publisher\nSurvives a source revision: append-only means a past run still resolves to what it saw", shape=box, style="rounded,filled", fillcolor="#EEF2FF", color="#4F46E5", penwidth=2];
   score -> provenance [style=dashed, arrowhead=none];
   landing -> provenance [style=dashed, arrowhead=none];
 }

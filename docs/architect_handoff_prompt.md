@@ -2,7 +2,7 @@
 
 **Attachments**
 1. `docs/technical_design.md` — the TDD under review (651 lines)
-2. `Technical Design Document (TDD).pdf` — the reference TDD whose structure ours deliberately mirrors
+2. `reference/Technical Design Document (TDD).pdf` — the reference TDD whose structure ours deliberately mirrors
 3. `README.md` — what is built, how to run it, credential status, data limitations
 
 ---

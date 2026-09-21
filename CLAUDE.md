@@ -13,8 +13,8 @@ that a non-engineer stakeholder can use and reason about.
 The domain knowledge comes from the user's own reading notes on two books by
 **Erik Brynjolfsson and Andrew McAfee**:
 
-- `Second_Machine_Age_Notes_edited.pdf`
-- `machines__platforms__crowds_notes_refined.pdf`
+- `reference/Second_Machine_Age_Notes_edited.pdf`
+- `reference/machines__platforms__crowds_notes_refined.pdf`
 
 These notes encapsulate the history of technological disruption to the
 **economy, the labor force, and innovation** — general purpose technologies,
@@ -182,7 +182,7 @@ are flagged and must be spot-checked before customer-facing use.
 ## Architecture (designed 2026-09-19)
 
 TDD at `docs/technical_design.md`, structured to match the reference TDD
-(`Technical Design Document (TDD).pdf`, Cold-Chain Logistics AI-Assistant):
+(`reference/Technical Design Document (TDD).pdf`, Cold-Chain Logistics AI-Assistant):
 HLD/LLD split, three-tier decoupling, security at the physical database layer,
 append-only audit, deployment topology + network perimeter.
 
@@ -194,9 +194,11 @@ Load-bearing decisions:
   `VW_CLAIM_EVIDENCE`, `VW_INDUSTRY_METRIC`) through `USR_FDE_RO`, which is
   denied every base table and all DDL. The view set is also the scope control:
   only project #1's datasets are published.
-- **Three separate credentials.** `USR_FDE_RO` (agent), `USR_FDE_LOAD`
-  (ingestion), `USR_FDE_SCORE` (scoring). The agent can request a score but
-  cannot write one.
+- **Four separate credentials.** `USR_FDE_RO` (agent), `USR_FDE_LOAD`
+  (ingestion), `USR_FDE_SCORE` (scoring), `USR_FDE_AUDIT` (audit adapter,
+  INSERT-only on the log). The agent can request a score but cannot write one,
+  and no orchestration node holds a write credential of any kind. The fourth
+  was added at architecture review; see the review-closed section below.
 - **Agents judge categories; Python computes numbers.** Classifier decides
   routine/non-routine and tacitness; the deterministic service does the
   arithmetic. A model change cannot move a customer-facing quantity.
@@ -213,10 +215,11 @@ Load-bearing decisions:
 - **P2 (deterministic scoring) ships before P3 (agents)** so the agents'
   contribution is measurable rather than assumed.
 
-Four open decisions, all recorded in TDD §5.1. Decision 1 (task weighting for
-13-2051) blocks P1. Decision 3 (whether to fit a logistic curve to a
-sub-two-year adoption window, or decline and report a range) is the one where
-the honest choice is the less impressive one.
+Four decisions were open at design time and are **all now resolved** — see the
+architecture-review section below and TDD Appendix A. Decision 1 (task
+weighting) resolved to equal-weight primary plus an adjacent-SOC sensitivity
+bound; decision 3 resolved to no curve fitting, which was the honest choice and
+the less impressive one.
 
 ---
 
@@ -441,3 +444,52 @@ Two real findings:
 
 Next: W4, view-backed tools and run-source binding. Blocked only on mixed-mode
 auth for the privilege tests, which the plan already tracks as expected-skip.
+
+---
+
+## Gap closure pass (2026-09-21)
+
+Swept every open item accumulated across the session and closed what did not
+need Administrator rights.
+
+**Closed:**
+- **Graphviz installed** (portable build to `~/AppData/Local/Programs/Graphviz`;
+  winget hung and was abandoned after two attempts).
+- **`Architecture_V2.png` regenerated** from the corrected `.dot`, 4538×2199,
+  no Graphviz warning. Twelve edits: `splines=ortho` → `polyline` (ortho
+  silently drops edge labels, which is what put "categorical task judgments" on
+  the *lag* edge and inverted the diagram's central claim), ingestion relabelled
+  append-only, `audit.run_source_binding` and the **Local Audit Adapter**
+  holding `USR_FDE_AUDIT` added, all seven node→audit edges rerouted through
+  the adapter, and the traceability statement now runs through the binding step.
+  Verified visually, not just by exit code.
+- **`tests/test_privileges.py`** — 25 assertions across all four principals.
+  Currently skips with a precise reason per principal; becomes real the moment
+  mixed-mode auth is enabled. Replaces the single inverted assertion that
+  merely recorded the gap.
+- **`scripts/enable_sql_auth.ps1`** — turnkey: registry, service restart,
+  per-principal password generation into `.env`, login creation, verification.
+- **Stale docs fixed:** "three separate credentials" → four; "Decision 1 blocks
+  P1" → all four decisions resolved.
+- **Reference material moved to `reference/`** with a README explaining what
+  belongs there. Project root now holds only `CLAUDE.md`, `README.md`,
+  `requirements.txt`, `pytest.ini`.
+- **`verify_database.py` vs `test_guardrails.py`** — the overlap is deliberate,
+  not duplication: the script checks *production*, the suite checks the rebuilt
+  test database. A hand-patched production schema shows up only in the former.
+  Documented in the script.
+
+**Still open, each needing something only the user can do:**
+1. **Mixed-mode auth** — needs elevation. Script is ready; it restarts the
+   instance, dropping connections to the other 26 databases.
+2. **Full-Text Search** — needs the SQL Server 2022 installation media; the
+   local bootstrap has no cached feature payload. Exact command in the README.
+3. **BLS v2 key** — free re-registration. Adapter already probes and falls back.
+4. **Credential rotation** — six keys have been in a shared directory, and the
+   repo is public.
+5. **Stale `OPENAI_API_KEY` env var** — user is handling.
+
+Deliberately *not* done unilaterally: the registry change and service restart.
+I can make the registry write via `xp_instance_regwrite` as sysadmin, but doing
+so without the restart would leave the instance silently switching auth mode on
+its next reboot. Preparing the script and handing it over is the honest option.

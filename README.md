@@ -183,19 +183,47 @@ assertion is defence in depth. Three — run-on quote detection, duplicate
 current versions, and views exposing `Source_Doc_ID` — have no constraint
 behind them and carry real weight on their own.
 
-### Environment prerequisites not yet met
+### Environment prerequisites — two remain, both needing elevation
 
-1. **Mixed-mode authentication is disabled.** The four SQL logins cannot be
-   created until it is enabled, which needs a registry change and a SQL Server
-   service restart affecting the instance's other 26 databases.
-2. **Full-Text Search is not installed.** Needed for `VW_CLAIM_EVIDENCE`
-   retrieval in P3, not for P1 or P2.
+**1. Mixed-mode SQL authentication** (blocks runtime privilege isolation)
 
-Because of (1) the loader currently runs under the developer's trusted
-connection rather than `USR_FDE_LOAD`. `session.py` logs this at WARNING on
-every run, and `test_integration.py` asserts the isolation is *not* in force
-rather than passing silently — the security model is built and constrained, but
-untested at runtime until mixed mode is enabled.
+```powershell
+# from an ELEVATED PowerShell, in the project root
+powershell -ExecutionPolicy Bypass -File scripts\enable_sql_auth.ps1
+```
+
+The script sets `LoginMode = 2`, restarts the SQL Server service, generates a
+strong password per principal into `.env`, and applies
+`sql/06_logins_and_users.sql`. **It restarts the instance**, dropping open
+connections to every other database on it.
+
+Until it runs, the loader and scoring service connect as the developer, so the
+`DENY` grants are built but unproven at runtime. `session.py` logs a WARNING on
+every such run, and `tests/test_privileges.py` — 25 assertions covering all
+four principals — **skips with that reason rather than passing under a
+credential that would satisfy anything.** Running the script turns those skips
+into real assertions.
+
+**2. Full-Text Search** (needed for `VW_CLAIM_EVIDENCE` retrieval in W4, not
+before)
+
+```powershell
+# needs the SQL Server 2022 installation media; the local bootstrap has no
+# cached feature payload
+& "C:\Program Files\Microsoft SQL Serverp\Setup Bootstrap\SQL2022\setup.exe" `
+    /ACTION=Install /FEATURES=FullText /INSTANCENAME=MSSQLSERVER `
+    /IACCEPTSQLSERVERLICENSETERMS /QS
+```
+
+`sql/07_fulltext.sql` detects its absence and skips cleanly, so nothing breaks
+in the meantime; `search_claims` falls back to `LIKE`, which is adequate for 21
+claims and not beyond.
+
+**3. BLS API key** (not elevation — free re-registration at
+`data.bls.gov/registrationEngine`). The current key is rejected by v2, so the
+adapter falls back to keyless v1 and logs it: 25 series per query, a 10-year
+window, 25 queries/day against v2's 50 / 20 years / 500. `bls.key_is_valid()`
+probes first, so a working key is picked up with no code change.
 
 ## Deterministic scoring service (P2 — complete)
 

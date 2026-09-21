@@ -27,6 +27,8 @@ data/docs/
 # Remove these lines deliberately if they should be published.
 *.pdf
 !docs/**/*.pdf
+# reference/README.md explains what belongs there; the PDFs themselves stay out.
+!reference/README.md
 
 # --- Screenshots containing host or account detail ----------------------
 Diagrams/Windows_Authentication.png
