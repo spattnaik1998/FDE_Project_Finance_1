@@ -35,8 +35,36 @@ python scripts/analyze_data.py   # writes notes/data_exploration.md
 
 ## Credentials
 
-Four keys in `.env` (gitignored), read by `src/config.py`, which tolerates both
-`KEY=value` and the `KEY: 'value'` form the file currently uses.
+Six keys in `.env` (gitignored), read by `src/config.py`, which tolerates
+`KEY=value`, `KEY = 'value'` and `KEY: value`.
+
+### Resolution precedence — most specific source wins
+
+1. An environment variable **explicitly set for this process** — someone
+   exported it for this run, so they meant it.
+2. The project's **`.env`**.
+3. An **inherited** user- or machine-scope environment variable.
+
+This is deliberately *not* plain environment-beats-file. A machine-scope
+variable is system-wide configuration; a project's `.env` is narrower and more
+intentional, so the project wins. `config.persisted_env_value()` reads the
+Windows registry (unprivileged) to tell an inherited variable from a
+deliberately exported one, and `config.key_sources()` reports which source each
+credential came from.
+
+The rule exists because it was needed: a stale machine-level `OPENAI_API_KEY`
+shadowed a valid `.env` entry and surfaced as an opaque provider 401, with no
+fix available short of Administrator rights. `.env` now wins and logs that it
+did.
+
+**Optional permanent cleanup.** The stale machine variable is harmless now but
+still misleading. To remove it, from an **elevated** PowerShell:
+
+```powershell
+[Environment]::SetEnvironmentVariable('OPENAI_API_KEY', $null, 'Machine')
+```
+
+Then restart any open shell. Nothing in the project depends on this.
 
 | Key | Status |
 |---|---|

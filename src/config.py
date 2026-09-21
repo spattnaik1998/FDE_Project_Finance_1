@@ -51,8 +51,87 @@ def _parse_env_file(path: Path) -> dict[str, str]:
     return values
 
 
+def persisted_env_value(name: str) -> str | None:
+    """The value of an env var as *persisted* in Windows user/machine scope.
+
+    Used to tell an inherited system-wide variable apart from one a caller
+    exported deliberately for this process. Reading the registry needs no
+    elevation; only writing does.
+
+    Returns ``None`` off Windows, where the distinction does not exist and the
+    ordinary precedence applies.
+    """
+    if os.name != "nt":
+        return None
+    try:
+        import winreg
+    except ImportError:
+        return None
+
+    scopes = (
+        (winreg.HKEY_CURRENT_USER, r"Environment"),
+        (winreg.HKEY_LOCAL_MACHINE,
+         r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+    )
+    for root, path in scopes:
+        try:
+            with winreg.OpenKey(root, path) as key:
+                value, _ = winreg.QueryValueEx(key, name)
+                if value:
+                    return str(value)
+        except (FileNotFoundError, OSError):
+            continue
+    return None
+
+
+def resolve_key(name: str, file_values: dict[str, str]) -> tuple[str, str]:
+    """Resolve one credential, most-specific source first.
+
+    Precedence, deliberately not plain environment-over-file:
+
+    1. An environment variable **explicitly set for this process** — someone
+       exported it for this run, so they meant it.
+    2. The project's ``.env``.
+    3. An **inherited** user- or machine-scope environment variable.
+
+    The distinction in (1) versus (3) matters. A machine-scope variable is
+    system-wide configuration; a project's own ``.env`` is narrower and more
+    intentional, so the project should win. Plain
+    environment-beats-file precedence let a stale machine-level key shadow a
+    valid ``.env`` entry and surface as an opaque provider 401 — with no way
+    to fix it short of Administrator rights.
+
+    Returns ``(value, source)`` so the caller can log which source won.
+    """
+    env_value = os.environ.get(name)
+    file_value = file_values.get(name)
+
+    if env_value:
+        persisted = persisted_env_value(name)
+        inherited = persisted is not None and env_value == persisted
+
+        if not inherited:
+            return env_value, "process environment"
+        if file_value:
+            LOG.info(
+                "key=%s status=dotenv_overrides_inherited_env -- using %s "
+                "(...%s) in preference to the inherited system variable "
+                "(...%s), which is broader in scope",
+                name, ENV_PATH.name, file_value[-4:], env_value[-4:])
+            return file_value, ENV_PATH.name
+        LOG.warning(
+            "key=%s status=using_inherited_system_env -- no %s entry, so the "
+            "system-wide variable is used. If it is stale, provider calls will "
+            "fail with an auth error.", name, ENV_PATH.name)
+        return env_value, "inherited system environment"
+
+    if file_value:
+        return file_value, ENV_PATH.name
+    return "", "unset"
+
+
 def load_keys(include_models: bool = False) -> dict[str, str]:
-    """Return the API keys, preferring real environment variables.
+    """Return the API keys, resolving each from its most specific source.
 
     ``include_models`` additionally requires the model-provider credentials, so
     an ingestion run does not fail for want of a key it never uses.
@@ -62,29 +141,26 @@ def load_keys(include_models: bool = False) -> dict[str, str]:
     """
     wanted = tuple(REQUIRED_KEYS) + (MODEL_KEYS if include_models else ())
     file_values = _parse_env_file(ENV_PATH)
-    keys = {k: os.environ.get(k) or file_values.get(k, "") for k in wanted}
 
-    # A process environment variable takes precedence over .env, which is the
-    # right default -- but a *stale* one then shadows a valid file value and
-    # surfaces as an opaque 401 from the provider. Say so instead.
-    for key in wanted:
-        env_value = os.environ.get(key)
-        file_value = file_values.get(key)
-        if env_value and file_value and env_value != file_value:
-            LOG.warning(
-                "key=%s status=env_shadows_dotenv -- the process environment "
-                "value (...%s) is being used and differs from the one in %s "
-                "(...%s). If provider calls fail with an auth error, unset the "
-                "environment variable.",
-                key, env_value[-4:], ENV_PATH.name, file_value[-4:])
+    keys: dict[str, str] = {}
+    for name in wanted:
+        value, _source = resolve_key(name, file_values)
+        keys[name] = value
 
     missing = [k for k, v in keys.items() if not v]
     if missing:
         raise ConfigError(
             f"Missing API key(s): {', '.join(missing)}. "
-            f"Add them to {ENV_PATH} as KEY: 'value' or export them."
+            f"Add them to {ENV_PATH} as KEY = 'value' or export them."
         )
     return keys
+
+
+def key_sources(include_models: bool = False) -> dict[str, str]:
+    """Which source each credential resolved from. For diagnostics."""
+    wanted = tuple(REQUIRED_KEYS) + (MODEL_KEYS if include_models else ())
+    file_values = _parse_env_file(ENV_PATH)
+    return {name: resolve_key(name, file_values)[1] for name in wanted}
 
 
 def ensure_dirs() -> None:

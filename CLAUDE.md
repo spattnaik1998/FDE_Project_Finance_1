@@ -543,3 +543,36 @@ Two real findings:
 result, not just the log.
 
 Next: W5, orchestration nodes. All dependencies are in place.
+
+---
+
+## Credential precedence fixed (2026-09-21)
+
+The stale `OPENAI_API_KEY` turned out to be **Machine scope**, so removing it
+needs Administrator rights I do not have. Rather than leave the project broken
+in a normal shell, I fixed the precedence rule — which was the actual defect.
+
+**New rule, most specific source wins:**
+1. An env var **explicitly set for this process** (someone exported it; they
+   meant it)
+2. The project's **`.env`**
+3. An **inherited** user- or machine-scope env var
+
+Not plain environment-beats-file. A machine-scope variable is system-wide
+configuration; a project's `.env` is narrower and more intentional, so the
+project wins. `config.persisted_env_value()` reads the Windows registry
+(unprivileged — only *writing* needs elevation) to tell an inherited variable
+from a deliberately exported one. `config.key_sources()` reports the winner per
+credential.
+
+Verified: all six keys now resolve from `.env`, the live provider tests pass,
+and **the full suite is green in a normal shell** — 391 passed, 29 skipped,
+three consecutive runs. No more `unset OPENAI_API_KEY` workaround.
+
+22 new tests in `tests/test_config.py` cover the whole ladder, the logging, and
+the `.env` parser's tolerance for every format the file has been hand-edited
+into.
+
+The machine variable is now harmless but still misleading. Optional cleanup,
+elevated: `[Environment]::SetEnvironmentVariable('OPENAI_API_KEY', $null, 'Machine')`.
+Nothing depends on it.
