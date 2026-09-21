@@ -396,3 +396,48 @@ per occupation rather than per table.
 
 Next: W3, provider adapters. Both providers verified live; config already
 points the Review Gate at Anthropic and the classifier at gpt-6-astra.
+
+---
+
+## W3 complete — provider adapters (2026-09-21)
+
+310 tests (304 without credentials). Branch `feat/p3-provider-adapters`.
+
+One interface, two genuinely different mechanisms, both established by probing
+the live API rather than from documentation:
+- **OpenAI** `/v1/responses` with strict `json_schema`. Function tools do not
+  work on `/v1/chat/completions` for `gpt-6-astra`, and `reasoning_effort:
+  'none'` is rejected for this model, so there is no workaround there.
+- **Anthropic** has no `json_schema` response format. Structure comes from a
+  single forced tool call whose `input_schema` is the contract; `stop_reason`
+  returns `tool_use` and the tool input is the answer.
+
+Neither adapter falls back to parsing prose. `SchemaViolation` carries the
+offending payload so a bad response is debuggable without re-running the call.
+
+A test parses every module outside `src/providers/` and fails if `openai` or
+`anthropic` is imported — the charter's no-SDK-leakage rule, enforced.
+
+Stage→vendor mapping lives in `providers/registry.py`, with a test asserting
+the Review Gate is a different vendor from the Task Classifier. That is the
+cross-provider independence property, not a stylistic choice.
+
+**Cost accounting withholds rather than guesses.** Tokens are always recorded;
+cost only when `PRICE_<MODEL>_INPUT`/`_OUTPUT` is configured. `gpt-6-astra`
+postdates my reference material so its price is unknown here, and the ledger
+reports `cost_status: unpriced_models: gpt-6-astra` instead of a total missing
+half the calls.
+
+Two real findings:
+1. **`sleep` was bound as a default argument** (`sleep: Callable = time.sleep`),
+   captured at import. Monkeypatching had no effect, so the retry tests were
+   sitting through real backoff — the file ran in ~14s while appearing to
+   control timing. Now resolved at call time; the file runs in 0.15s.
+2. **A stale `OPENAI_API_KEY` environment variable on this machine shadows
+   `.env`** and is invalid, surfacing as an opaque 401. `config.load_keys` now
+   logs `status=env_shadows_dotenv` naming both suffixes when they differ.
+   **Needs user action: unset or update the system-level variable.** The `.env`
+   key itself is valid (verified HTTP 200).
+
+Next: W4, view-backed tools and run-source binding. Blocked only on mixed-mode
+auth for the privilege tests, which the plan already tracks as expected-skip.
