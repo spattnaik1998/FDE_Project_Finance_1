@@ -269,6 +269,61 @@ introducing the coupling means also deleting the test.
 
 It was written before `lag.py` existed and failed for the right reason first.
 
+## Provider adapters (W3 — complete)
+
+```bash
+python -m pytest                 # 310 tests (6 hit live APIs)
+python -m pytest -m "not live"   # 304 tests, no credentials needed
+```
+
+One interface over two providers. Callers ask for a structured completion and
+get a `ModelResponse`; they never import `openai` or `anthropic`, never learn
+which mechanism produced the structure, and never see an endpoint URL. A test
+parses every module outside `src/providers/` and fails if a vendor SDK is
+imported.
+
+| Stage | Vendor | Model |
+|---|---|---|
+| Intent & Scope | Anthropic | `MODEL_ORCHESTRATOR` |
+| Task Classifier | OpenAI | `MODEL_CLASSIFIER` |
+| Review Gate | Anthropic | `MODEL_REVIEW_GATE` |
+| Synthesis | OpenAI | `MODEL_WRITER` |
+
+The split is the cross-provider independence property from TDD §2 — the gate
+grading the classifier's work is a different vendor from the one that produced
+it — and it has a test rather than a comment.
+
+### Two mechanisms, one interface
+
+Both established by probing the live API, not from documentation:
+
+- **OpenAI** uses `/v1/responses` with a strict `json_schema`. Not
+  `/v1/chat/completions`: function tools are unsupported there for
+  `gpt-6-astra`, and the documented workaround (`reasoning_effort: 'none'`) is
+  itself rejected for this model.
+- **Anthropic** has no `json_schema` response format. Structure comes from
+  declaring one tool whose `input_schema` *is* the contract and forcing it with
+  `tool_choice`; the tool input is the answer.
+
+Neither adapter falls back to parsing prose when structure fails. A schema
+obtained by guessing at free text is not a schema, so `SchemaViolation` is
+raised with the offending payload attached.
+
+### Cost accounting withholds rather than guesses
+
+Token counts are facts the API reports and are always recorded. **Cost is
+reported only when a price is configured** via `PRICE_<MODEL>_INPUT` /
+`_OUTPUT`. `gpt-6-astra` postdates this project's reference material, so its
+price is not known here; the ledger returns `cost_usd: None` with
+`cost_status: "unpriced_models: gpt-6-astra"` rather than a total that silently
+omits half the calls.
+
+### Retry
+
+Retries 408/409/425/429 and 5xx with exponential backoff plus jitter; raises
+immediately on any other 4xx, because a 400 will be 400 again. `run_id` and
+`stage` travel on every call through `CallContext` and appear in every log line.
+
 ## Known data limitations
 
 These constrain what the prototype may claim, and are repeated in the report:

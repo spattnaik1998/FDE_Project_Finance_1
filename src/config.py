@@ -7,8 +7,11 @@ loader here tolerates both separators so the file can stay as the user wrote it.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
+
+LOG = logging.getLogger("config")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = PROJECT_ROOT / ".env"
@@ -60,6 +63,20 @@ def load_keys(include_models: bool = False) -> dict[str, str]:
     wanted = tuple(REQUIRED_KEYS) + (MODEL_KEYS if include_models else ())
     file_values = _parse_env_file(ENV_PATH)
     keys = {k: os.environ.get(k) or file_values.get(k, "") for k in wanted}
+
+    # A process environment variable takes precedence over .env, which is the
+    # right default -- but a *stale* one then shadows a valid file value and
+    # surfaces as an opaque 401 from the provider. Say so instead.
+    for key in wanted:
+        env_value = os.environ.get(key)
+        file_value = file_values.get(key)
+        if env_value and file_value and env_value != file_value:
+            LOG.warning(
+                "key=%s status=env_shadows_dotenv -- the process environment "
+                "value (...%s) is being used and differs from the one in %s "
+                "(...%s). If provider calls fail with an auth error, unset the "
+                "environment variable.",
+                key, env_value[-4:], ENV_PATH.name, file_value[-4:])
 
     missing = [k for k, v in keys.items() if not v]
     if missing:
