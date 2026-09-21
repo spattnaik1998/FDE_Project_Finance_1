@@ -13,10 +13,18 @@ import pytest
 from warehouse.session import Principal, connect, is_isolated
 
 EXPECTED = {
-    "core.task": 26,
     "core.exposure_estimate": 774,
     "core.adoption_observation": 126,
     "core.extracted_claim": 21,
+}
+
+# Task counts are asserted per occupation, not per table: the warehouse holds
+# the target occupation plus the rated neighbour used for the sensitivity
+# bound, so a table-wide count would have to change every time another
+# occupation is added.
+EXPECTED_TASKS_BY_SOC = {
+    "13-2051.00": 26,   # target: analyst-written, no importance ratings
+    "13-2099.01": 21,   # rated neighbour, for the weighting sensitivity
 }
 
 
@@ -33,6 +41,13 @@ def prod():
 @pytest.mark.parametrize("table,expected", EXPECTED.items())
 def test_expected_row_counts(prod, table, expected):
     assert prod.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == expected
+
+
+@pytest.mark.parametrize("soc,expected", EXPECTED_TASKS_BY_SOC.items())
+def test_expected_task_counts_per_occupation(prod, soc, expected):
+    actual = prod.execute(
+        "SELECT COUNT(*) FROM dbo.VW_ROLE_TASKS WHERE SOC_Code = ?", soc).fetchone()[0]
+    assert actual == expected
 
 
 def test_every_fact_resolves_to_a_registered_source(prod):
@@ -111,3 +126,77 @@ def test_privilege_isolation_is_not_yet_in_force(prod):
     and the suite says so rather than passing silently.
     """
     assert not is_isolated(Principal.READ_ONLY)
+
+
+# --- P2: the control run, end to end ---------------------------------------
+
+def test_control_run_persisted_a_verdict(prod):
+    """The deterministic path must produce a defensible number before any agent."""
+    row = prod.execute("""
+        SELECT TOP 1 v.exposure_index, v.lag_years_p10, v.lag_years_p50,
+                     v.lag_years_p90, v.weight_source, LEN(v.caveats), r.status
+        FROM score.role_verdict v JOIN score.run r ON r.run_id = v.run_id
+        WHERE v.soc_code = '13-2051.00'
+        ORDER BY v.created_at DESC""").fetchone()
+    if row is None:
+        pytest.skip("no scoring run yet; run scripts/run_scoring.py")
+
+    assert 0.0 <= float(row[0]) <= 1.0
+    assert float(row[1]) <= float(row[2]) <= float(row[3])
+    assert row[4] == "equal", "primary weighting must be the equal-weight convention"
+    assert row[5] > 200, "the caveat block must be substantive, not a token string"
+    assert row[6] in ("passed", "review_required", "gate_rejected")
+
+
+def test_control_run_bound_the_sources_it_consumed(prod):
+    run_id = prod.execute("""SELECT TOP 1 run_id FROM score.role_verdict
+                             ORDER BY created_at DESC""").fetchone()
+    if run_id is None:
+        pytest.skip("no scoring run yet")
+
+    usages = {r[0] for r in prod.execute(
+        "SELECT usage_type FROM audit.run_source_binding WHERE run_id = ?",
+        run_id[0]).fetchall()}
+    assert "task_source" in usages
+    assert "adoption_evidence" in usages, "the lag path's evidence must be bound too"
+
+
+def test_control_run_lag_was_not_curve_fitted(prod):
+    row = prod.execute("""SELECT TOP 1 lag_basis FROM score.role_verdict
+                          ORDER BY created_at DESC""").fetchone()
+    if row is None:
+        pytest.skip("no scoring run yet")
+    assert "no curve is fitted" in row[0].lower()
+
+
+def test_control_run_scores_every_task_with_provenance(prod):
+    run_id = prod.execute("""SELECT TOP 1 run_id FROM score.role_verdict
+                             WHERE soc_code = '13-2051.00'
+                             ORDER BY created_at DESC""").fetchone()
+    if run_id is None:
+        pytest.skip("no scoring run yet")
+
+    orphans = prod.execute("""
+        SELECT COUNT(*) FROM score.task_score s
+        WHERE s.run_id = ?
+          AND NOT EXISTS (SELECT 1 FROM core.task t
+                          WHERE t.task_id = s.task_id
+                            AND t.source_doc_id = s.source_doc_id)""",
+        run_id[0]).fetchone()[0]
+    assert orphans == 0, "every score must resolve to the task version it scored"
+
+
+def test_adjacent_occupation_is_loaded_with_real_ratings(prod):
+    """The sensitivity bound needs weights; 13-2099.01 is the rated neighbour."""
+    rated = prod.execute("""SELECT COUNT(*) FROM dbo.VW_ROLE_TASKS
+                            WHERE SOC_Code = '13-2099.01'
+                              AND Importance IS NOT NULL""").fetchone()[0]
+    assert rated >= 20, "13-2099.01 should carry O*NET incumbent importance ratings"
+
+
+def test_target_occupation_has_no_ratings_as_documented(prod):
+    """The data property that forced the equal-weight convention."""
+    rated = prod.execute("""SELECT COUNT(*) FROM dbo.VW_ROLE_TASKS
+                            WHERE SOC_Code = '13-2051.00'
+                              AND Importance IS NOT NULL""").fetchone()[0]
+    assert rated == 0
