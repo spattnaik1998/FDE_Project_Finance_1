@@ -493,3 +493,53 @@ Deliberately *not* done unilaterally: the registry change and service restart.
 I can make the registry write via `xp_instance_regwrite` as sysadmin, but doing
 so without the restart would leave the instance silently switching auth mode on
 its next reboot. Preparing the script and handing it over is the honest option.
+
+---
+
+## W4 complete — tool surface and run-source binding (2026-09-21)
+
+369 tests pass, 29 skip with stated reasons. Branch `feat/p4-tool-surface`.
+
+Six read tools over five views: `get_tasks`, `get_exposure_benchmarks`,
+`get_adoption_curve`, `search_claims`, `get_industry_metric`,
+`get_source_document`. Six tools, not twenty datasets — the view set is the
+scope control.
+
+Three properties enforced rather than assumed:
+- **Scope** — `ALLOWED_VIEWS` whitelist checked before execution, plus an `ast`
+  test that parses `evidence.py` and fails if any tool SQL names a base table.
+- **Provenance** — a row without `Source_Doc_ID` raises `ProvenanceMissing`.
+- **Consumption** — bound when a tool *returns* a row carrying the source.
+  The operational definition is stated in the module: stricter is
+  unobservable, looser binds the warehouse, returned-to-caller is the narrowest
+  measurable boundary. Zero rows bind nothing.
+
+`AuditAdapter` holds `USR_FDE_AUDIT` and is the only writer to
+`AgentAuditLog`. No orchestration node holds a write credential; nodes call
+`emit`. `tool_raw_output` stored unmodified.
+
+`run_scoring.py` now reads through the tool surface, so binding and audit are
+exercised now rather than first appearing in W5. Verified in the database:
+4 bindings across 4 usage types, 6 audit entries with raw output preserved.
+
+**Exposure index moved 0.555 → 0.541** — not drift. The earlier
+`examin.*facilit` fix now correctly places "Assess companies as investments by
+examining company facilities" in the manual cell (0.037). A language model does
+not walk a factory floor.
+
+Two real findings:
+1. **`claude-opus-5` can spend its entire token budget on reasoning and return
+   `text=None`.** Observed live at `max_tokens=16` with
+   `reasoning_tokens == output_tokens`. `complete()` returned that silently
+   while `structured()` already raised for the same cause; it now raises with
+   the cause named. This would have surfaced in W5 as a mysteriously empty
+   classification.
+2. A structural test matched the module **docstring** rather than SQL, because
+   the prose contained "FROM ". Now requires `SELECT` and `FROM`, plus an
+   assertion that some SQL was actually found — otherwise the test passes
+   vacuously.
+
+`search_claims` falls back to `LIKE` without FULLTEXT and reports it in the
+result, not just the log.
+
+Next: W5, orchestration nodes. All dependencies are in place.

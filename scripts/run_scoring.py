@@ -17,6 +17,9 @@ import sys
 sys.path.insert(0, "src")
 
 from scoring import baseline, run as runner
+from tools.audit_adapter import AuditAdapter
+from tools.consumption import ConsumptionTracker
+from tools.evidence import EvidenceTools
 from warehouse.session import Principal, connect
 
 logging.basicConfig(level=logging.INFO,
@@ -44,50 +47,27 @@ def main() -> None:
                         help="Mark the run customer-deliverable (gates on mirrors)")
     args = parser.parse_args()
 
-    consumed: dict[str, set[str]] = {}
+    context = runner.new_run(is_customer_deliverable=args.deliverable)
+    tracker = ConsumptionTracker(run_id=context.run_id)
+    audit = AuditAdapter(run_id=context.run_id)
+    tools = EvidenceTools(tracker=tracker, audit=audit, node="evidence_retrieval")
 
-    with connect(Principal.READ_ONLY) as conn:
-        cursor = conn.cursor()
+    # The control run reads through the same six tools the agent will use, so
+    # the consumption binding and the audit trail are exercised now rather
+    # than first appearing in W5.
+    tasks = tools.get_tasks(args.soc).rows
+    adoption = tools.get_adoption_curve(FINANCE_SECTOR).rows
+    claims = tools.search_claims(topic="lag_length").rows
+    claims += tools.search_claims(topic="j_curve_definition").rows
 
-        tasks = _rows(cursor, """
-            SELECT Task_ID, Statement, Weight_Source, Source_Doc_ID
-            FROM dbo.VW_ROLE_TASKS WHERE SOC_Code = ? ORDER BY Task_ID""", args.soc)
-        if not tasks:
-            LOG.error("soc=%s status=no_tasks", args.soc)
-            sys.exit(1)
-        consumed["task_source"] = {t["Source_Doc_ID"] for t in tasks}
+    benchmark_rows = tools.get_exposure_benchmarks(
+        BENCHMARK_SOC, measure=BENCHMARK_MEASURE).rows
+    benchmark_percentile = (float(benchmark_rows[0]["Percentile"])
+                            if benchmark_rows else None)
 
-        adoption = _rows(cursor, """
-            SELECT Period_Start, Value, Source_Doc_ID
-            FROM dbo.VW_ADOPTION_CURVE
-            WHERE Sector_Code = ? AND Question_Code = '7' AND Answer_Label = 'Yes'
-              AND Value IS NOT NULL
-            ORDER BY Period_Start""", FINANCE_SECTOR)
-        consumed["adoption_evidence"] = {a["Source_Doc_ID"] for a in adoption}
-
-        claims = _rows(cursor, """
-            SELECT Claim_ID, Topic, Quote, Page, Source_Doc_ID, Is_Mirror
-            FROM dbo.VW_CLAIM_EVIDENCE
-            WHERE Topic IN ('lag_length', 'j_curve_definition',
-                            'intangible_complement', 'mismeasurement')""")
-        consumed["claim_evidence"] = {c["Source_Doc_ID"] for c in claims}
-
-        # Importance ratings from the adjacent occupation. Used only to bound
-        # the role index, never as the primary weighting: importing a
-        # quantitative occupation's importance structure as the answer would
-        # push the result in the direction we are trying to measure.
-        adjacent = _rows(cursor, """
-            SELECT Importance FROM dbo.VW_ROLE_TASKS
-            WHERE SOC_Code = ? AND Importance IS NOT NULL""", ADJACENT_SOC)
-        adjacent_weights = [float(r["Importance"]) for r in adjacent]
-
-        benchmark = _rows(cursor, """
-            SELECT Value, Percentile, Scale_Note, Source_Doc_ID
-            FROM dbo.VW_EXPOSURE_BENCHMARK
-            WHERE SOC_Code = ? AND Measure = ?""", BENCHMARK_SOC, BENCHMARK_MEASURE)
-        benchmark_percentile = float(benchmark[0]["Percentile"]) if benchmark else None
-        if benchmark:
-            consumed["exposure_benchmark"] = {benchmark[0]["Source_Doc_ID"]}
+    adjacent_weights = [float(r["Importance"])
+                        for r in tools.get_tasks(ADJACENT_SOC).rows
+                        if r.get("Importance") is not None]
 
     classifications = baseline.classify_all(tasks)
     source_docs = {t["Task_ID"]: t["Source_Doc_ID"] for t in tasks}
@@ -105,7 +85,6 @@ def main() -> None:
         our_percentile=None,   # one occupation scored: not identifiable
     )
 
-    context = runner.new_run(is_customer_deliverable=args.deliverable)
     with connect(Principal.SCORE) as conn:
         cursor = conn.cursor()
         runner.open_run(cursor, context)
@@ -113,7 +92,7 @@ def main() -> None:
                               model=baseline.BASELINE_VERSION,
                               prompt_version="n/a-baseline")
         runner.persist_verdict(cursor, context, verdict)
-        runner.bind_sources(cursor, context, consumed)
+        runner.bind_sources(cursor, context, tracker.as_dict())
         status = runner.close_run(cursor, context, verdict)
 
     # --- Report -----------------------------------------------------------
@@ -155,8 +134,10 @@ def main() -> None:
     for caveat in verdict.caveats:
         print(f"    - {caveat[:120]}")
     print()
-    print(f"  Sources bound: "
-          f"{sum(len(v) for v in consumed.values())} across {len(consumed)} usage types")
+    summary = tracker.summary()
+    print(f"  Sources bound:   {summary['bindings']} bindings across "
+          f"{summary['distinct_sources']} distinct sources {summary['by_usage']}")
+    print(f"  Audit entries:   {audit.entries_written}")
 
 
 if __name__ == "__main__":
