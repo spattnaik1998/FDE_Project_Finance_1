@@ -343,3 +343,56 @@ mixed mode is enabled.
 Next: W2, the deterministic scoring service. The independence test — asserting
 the lag path cannot read the exposure result — gets written before the lag
 model, not after.
+
+---
+
+## W2 complete — deterministic scoring service (2026-09-21)
+
+234 tests pass. Branch `feat/p2-scoring-service`. No agent involved, by design.
+
+**Control run, SOC 13-2051.00, 26 tasks:**
+- Exposure index **0.555** (equal weighting); sensitivity bound 0.518–0.594
+- Lag **p10 5.0 / p50 10.1 / p90 30.0** years, window 0.88 years, no curve fitted
+- Calibration `review_required`; 100% unclear direction (baseline cannot tell)
+
+The rubric discriminates: "Create client presentations" 0.900 against "Develop
+and maintain client relationships" 0.405 and "Confer with clients to
+restructure debt" 0.247. That spread is why this occupation was chosen.
+
+**The independence test was written first and failed for the right reason.**
+It enforces separation three ways — behavioural, interface, and structurally by
+parsing `lag.py` with `ast`. The structural check survives refactoring: adding
+the coupling requires deleting the test.
+
+Three refusals now built in rather than documented:
+1. `lag.py` holds the interval >= 15 years wide below a 2-year observation
+   window, and widens even when handed a narrow prior.
+2. Calibration returns `review_required` on a single-occupation run, because a
+   percentile is a rank and one score has no rank. **This is a real finding:
+   the calibration gate cannot function until several occupations are scored.**
+3. The adjacent-SOC sensitivity is a *bound*, not a point. No task-level
+   mapping exists between the occupations, so both extremal assignments are
+   computed and the result holds under any mapping.
+
+Design notes:
+- `TaskClassification` has no numeric field. If a score could be supplied
+  there, a model could set it.
+- `TaskScore` validates `adjusted == raw * (1 - tacitness)`, so a hand-built
+  score cannot lie about its own arithmetic.
+- `baseline.py` is the control, not the product — every classification low
+  confidence, direction always unclear. W5 must beat 0.555 meaningfully or the
+  model is adding cost rather than judgment.
+
+Two bugs found by the tests, both real:
+- `lag.py` rounded p10 to nearest, which narrowed the interval past a value it
+  was meant to contain. Now rounds directionally (floor the lower bound, ceil
+  the upper) so rounding can only widen.
+- `baseline.py` used `examine.*facilit`, which never matches "examin**ing**
+  company facilities" — the one task that most needs the manual cell.
+
+Warehouse now also holds 13-2099.01 (21 tasks with real O*NET ratings) so the
+sensitivity bound has weights. `core.task` is 47 rows; task counts are asserted
+per occupation rather than per table.
+
+Next: W3, provider adapters. Both providers verified live; config already
+points the Review Gate at Anthropic and the classifier at gpt-6-astra.

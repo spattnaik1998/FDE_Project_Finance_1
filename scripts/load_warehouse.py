@@ -9,6 +9,7 @@ sys.path.insert(0, "src")
 from pathlib import Path
 
 from config import DATA_INTERIM, DATA_RAW, PROJECT_ROOT
+from documents.adapters import onet
 from warehouse import loaders, quality, registry
 from warehouse.session import Principal, connect
 
@@ -18,6 +19,11 @@ logging.basicConfig(level=logging.INFO,
 LOG = logging.getLogger("load_warehouse")
 
 DOCS_DIR = PROJECT_ROOT / "data" / "docs"
+
+# The adjacent occupation used for the task-weighting sensitivity bound. Unlike
+# 13-2051 it DOES carry O*NET incumbent ratings, which is the whole reason it
+# was chosen -- see the resolved weighting decision in the TDD appendix.
+ADJACENT_SOC = "13-2099.01"
 
 
 def main() -> None:
@@ -29,6 +35,16 @@ def main() -> None:
 
         results = loaders.load_corpus(cur, DATA_INTERIM / "corpus.json", doc_map)
         results.append(loaders.load_industry_metrics(cur, DATA_RAW, doc_map))
+
+        # Adjacent occupation, loaded with its real O*NET importance ratings so
+        # the sensitivity bound has weights to work from.
+        adjacent = onet.load_tasks(
+            DOCS_DIR / "onet_task_statements.txt",
+            DOCS_DIR / "onet_task_ratings.txt",
+            soc_prefix=ADJACENT_SOC, source_doc_id="onet_task_statements")
+        results.append(loaders.load_tasks(
+            cur, [t.model_dump() for t in adjacent], doc_map,
+            weight_source="onet"))
 
         checks = quality.run_assertions(cur)
 

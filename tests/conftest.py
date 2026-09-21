@@ -127,3 +127,34 @@ def soc(cur):
         INSERT INTO ref.occupation (soc_code, title, domain_source, has_onet_ratings)
         VALUES ('13-2051.00', 'Financial and Investment Analysts', 'Analyst', 0)""")
     return "13-2051.00"
+
+
+# --- Scoring fixtures -------------------------------------------------------
+
+@pytest.fixture
+def adoption_series() -> list[dict]:
+    """A BTOS-shaped trajectory: finance AI use rising over ~11 months."""
+    return [
+        {"period_start": "2025-06-09", "value": 29.9},
+        {"period_start": "2025-06-16", "value": 29.4},
+        {"period_start": "2025-06-23", "value": 30.5},
+        {"period_start": "2025-12-29", "value": 30.7},
+        {"period_start": "2026-03-23", "value": 34.3},
+        {"period_start": "2026-04-13", "value": 36.8},
+        {"period_start": "2026-04-27", "value": 36.5},
+    ]
+
+
+@pytest.fixture
+def lag_claims() -> list[dict]:
+    """Historical grounding claims, as VW_CLAIM_EVIDENCE would return them."""
+    return [
+        {"claim_id": "brynjolfsson_productivity_j_curve:lag_length:6:0",
+         "topic": "lag_length", "page": 6,
+         "quote": "Accordingly, after an implementation lag period, AI might "
+                  "significantly impact economic growth as other GPTs have."},
+        {"claim_id": "brynjolfsson_productivity_j_curve:j_curve_definition:2:0",
+         "topic": "j_curve_definition", "page": 2,
+         "quote": "Our model generates a Productivity J-Curve that can explain "
+                  "the productivity slowdowns often accompanying the advent of GPTs."},
+    ]

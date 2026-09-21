@@ -197,6 +197,78 @@ every run, and `test_integration.py` asserts the isolation is *not* in force
 rather than passing silently — the security model is built and constrained, but
 untested at runtime until mixed mode is enabled.
 
+## Deterministic scoring service (P2 — complete)
+
+```bash
+python scripts/run_scoring.py      # control run: no agent involved
+python -m pytest                   # 234 tests
+```
+
+Pure Python, no network, no model calls, versioned by `rubric_version`. Ships
+**before** any agent so the agents' contribution is measurable rather than
+assumed.
+
+| Module | Responsibility |
+|---|---|
+| `schemas.py` | Typed contracts. `TaskClassification` carries **no numeric field** — if a score could be supplied there, a model could set it |
+| `exposure.py` | Acemoglu–Autor matrix lookup + Polanyi tacitness discount + role aggregation |
+| `lag.py` | Adoption lag from diffusion evidence and historical precedent. Imports nothing from the exposure path |
+| `calibration.py` | Three-state gate against the published benchmark |
+| `baseline.py` | Keyword classifier — the control the model must beat |
+| `run.py` | Run identity, verdict assembly, persistence, source binding |
+
+### The rubric
+
+| | Cognitive | Manual |
+|---|---|---|
+| **Routine** | 0.90 | 0.20 |
+| **Non-routine** | 0.55 | 0.05 |
+
+Tacitness discounts multiplicatively — low 0.00, medium 0.25, high 0.55 — and
+the discount is **reported separately**, not folded into one number. Manual
+work scores low because this is LLM exposure, not automation exposure in
+general: a language model does not move boxes.
+
+### Control run result (13-2051.00, 26 tasks)
+
+```
+EXPOSURE index   0.555          (equal weighting)
+sensitivity      0.518 – 0.594  (bound under 13-2099.01)
+LAG years        p10 5.0 | p50 10.1 | p90 30.0   (curve fitted: False)
+observation win  0.88 years
+calibration      review_required
+```
+
+Most exposed: "Create client presentations of plan details" (0.900). Least:
+"Confer with clients to restructure debt" (0.247) and "Develop and maintain
+client relationships" (0.405) — both on the high tacitness discount. The rubric
+discriminates rather than saturating, which was the reason for choosing this
+occupation.
+
+### Three refusals built into the design
+
+1. **No curve is fitted.** The observed window is 0.88 years. `lag.py` holds
+   the interval at least 15 years wide below a 2-year window, and says so in
+   the basis. Even handed a deliberately narrow prior it widens.
+2. **Calibration is not identifiable on one occupation.** A percentile is a
+   rank within a distribution and this run scored one occupation, so the
+   outcome is `review_required` with a stated reason rather than a silent pass.
+3. **The sensitivity is a bound, not a point.** No task-level mapping exists
+   between 13-2051 and 13-2099.01, so both extremal assignments of the
+   neighbour's importance distribution are computed. The true weighted index
+   lies in that range under *any* mapping.
+
+### Exposure and lag are provably independent
+
+`tests/test_independence.py` enforces it at three levels: behavioural (varying
+the exposure result leaves the lag byte-identical), interface (`estimate_lag`
+has no parameter an exposure could pass through), and **structural** — the test
+parses `lag.py` with `ast` and fails if it imports or references the exposure
+path. The structural check is the one that survives refactoring, because
+introducing the coupling means also deleting the test.
+
+It was written before `lag.py` existed and failed for the right reason first.
+
 ## Known data limitations
 
 These constrain what the prototype may claim, and are repeated in the report:

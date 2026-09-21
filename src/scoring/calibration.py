@@ -1,0 +1,113 @@
+"""Calibration against published exposure benchmarks.
+
+Three states, because **calibration disagreement and calibration failure are
+different things**. Our methodology and Felten/Raj/Seamans' AIOE are not the
+same estimand: theirs is a standardised relative index built from work
+activities, ours is a task-level rubric with an explicit Polanyi discount. A
+large delta accompanied by a documented methodological reason is a finding, not
+proof that the arithmetic is wrong. A gate that rejected it would quietly turn
+this system into a mechanism for reproducing somebody else's number.
+
+The tolerance is ``provisional_v1`` and is labelled as such: it is an
+engineering bootstrap, not a validated criterion. The empirical distribution of
+deviations across occupations should be examined before it is locked.
+"""
+
+from __future__ import annotations
+
+import logging
+from bisect import bisect_left
+from typing import Sequence
+
+from scoring.schemas import CalibrationOutcome, CalibrationResult
+
+LOG = logging.getLogger("scoring.calibration")
+
+CALIBRATION_POLICY_VERSION = "provisional_v1"
+DEFAULT_TOLERANCE_POINTS = 15.0
+
+SINGLE_OCCUPATION_EXPLANATION = (
+    "Our percentile is not identifiable from a single scored occupation. A "
+    "percentile is a rank within a distribution, and this run scored one "
+    "occupation, so there is no distribution of our own scores to rank within. "
+    "The benchmark value is recorded for reference and the run is held for "
+    "review rather than passed or rejected on an unidentifiable comparison."
+)
+
+
+class CalibrationError(ValueError):
+    """Calibration was asked for something it cannot compute."""
+
+
+def percentile_within(value: float, distribution: Sequence[float]) -> float | None:
+    """Where ``value`` sits in ``distribution``, as a percentile.
+
+    Returns ``None`` when the distribution is too small to define a rank. Two
+    points do not make a distribution, and pretending otherwise is how a
+    meaningless number acquires a decimal place.
+    """
+    ordered = sorted(distribution)
+    if len(ordered) < 10:
+        return None
+    below = bisect_left(ordered, value)
+    return round(100.0 * below / len(ordered), 2)
+
+
+def calibrate(our_percentile: float | None,
+              benchmark_percentile: float | None,
+              *,
+              benchmark_measure: str,
+              tolerance_points: float = DEFAULT_TOLERANCE_POINTS,
+              explanation: str | None = None) -> CalibrationResult:
+    """Compare our percentile with a published one and emit one of three states.
+
+    ``our_percentile`` of ``None`` means the comparison is not identifiable —
+    which yields ``review_required`` with a stated reason, never a silent pass.
+    """
+    if benchmark_percentile is None:
+        return CalibrationResult(
+            benchmark_measure=benchmark_measure,
+            benchmark_percentile=None, our_percentile=our_percentile,
+            delta=None, within_tolerance=False,
+            outcome=CalibrationOutcome.REVIEW_REQUIRED,
+            explanation=explanation or (
+                f"No published benchmark available for {benchmark_measure}, so "
+                f"the result is uncalibrated and held for review."))
+
+    if our_percentile is None:
+        return CalibrationResult(
+            benchmark_measure=benchmark_measure,
+            benchmark_percentile=benchmark_percentile, our_percentile=None,
+            delta=None, within_tolerance=False,
+            outcome=CalibrationOutcome.REVIEW_REQUIRED,
+            explanation=explanation or SINGLE_OCCUPATION_EXPLANATION)
+
+    delta = round(our_percentile - benchmark_percentile, 2)
+    within = abs(delta) <= tolerance_points
+
+    if within:
+        outcome = CalibrationOutcome.PASS
+        detail = explanation
+    elif (explanation or "").strip():
+        # Disagreement with a documented reason: a finding for a human.
+        outcome = CalibrationOutcome.REVIEW_REQUIRED
+        detail = explanation
+    else:
+        # Disagreement with no account of why: the arithmetic is not trusted.
+        outcome = CalibrationOutcome.GATE_REJECTED
+        detail = None
+
+    LOG.info("policy=%s status=%s benchmark=%.2f ours=%.2f delta=%+.2f tolerance=%.1f",
+             CALIBRATION_POLICY_VERSION, outcome.value, benchmark_percentile,
+             our_percentile, delta, tolerance_points)
+
+    return CalibrationResult(
+        benchmark_measure=benchmark_measure,
+        benchmark_percentile=benchmark_percentile,
+        our_percentile=our_percentile, delta=delta,
+        within_tolerance=within, outcome=outcome, explanation=detail)
+
+
+def gate_allows_report(result: CalibrationResult) -> bool:
+    """Only a clean pass produces a report without human intervention."""
+    return result.outcome is CalibrationOutcome.PASS
