@@ -182,9 +182,40 @@ class EvidenceTools:
                            targets=("dbo.VW_EXPOSURE_BENCHMARK",))
         return self._finish("get_exposure_benchmarks", rows,
                             UsageType.EXPOSURE_BENCHMARK, started,
-                            note=None if rows else
-                            "No published benchmark for this occupation; the "
-                            "result will be uncalibrated.")
+                            note=None if rows else self._no_benchmark_note(
+                                soc_code, measure))
+
+    def _no_benchmark_note(self, soc_code: str, measure: str | None) -> str:
+        """Explain a zero result without asserting an absence that is false.
+
+        Two code systems are in play. ``VW_ROLE_TASKS`` carries O*NET's 8-digit
+        codes (``13-2051.00``); the AIOE benchmark keys on the 6-digit SOC
+        (``13-2051``). A caller passing the task-style code therefore gets zero
+        rows even though a benchmark exists.
+
+        The note used to read "No published benchmark for this occupation",
+        which is simply wrong in that case -- and wrong in the direction that
+        matters, because a downstream reader would record the occupation as
+        unbenchmarked and the run as uncalibrated for a reason that is not the
+        real one. Callers are still expected to normalise (``retrieval`` does);
+        this makes the failure legible instead of silent.
+        """
+        if "." in soc_code:
+            base = soc_code.split(".")[0]
+            sql = """SELECT TOP 1 1 FROM dbo.VW_EXPOSURE_BENCHMARK
+                     WHERE SOC_Code = ?"""
+            params: tuple = (base,)
+            if measure:
+                sql += " AND Measure = ?"
+                params += (measure,)
+            if self._query(sql, params,
+                           targets=("dbo.VW_EXPOSURE_BENCHMARK",)):
+                return (f"No benchmark under {soc_code!r}, but one exists under "
+                        f"{base!r}. The benchmark keys on the 6-digit SOC while "
+                        f"task statements carry O*NET's 8-digit detail code; "
+                        f"these are different code systems. Query {base!r}.")
+        return ("No published benchmark for this occupation; the result will "
+                "be uncalibrated.")
 
     # -- 3. adoption curve -------------------------------------------------
 

@@ -662,6 +662,29 @@ ids) rather than findings — and `test_no_code_span_is_purely_numeric` closes
 the loophole that would otherwise open, so a figure cannot be smuggled in by
 wrapping it in backticks.
 
+## Stack verification
+
+```bash
+python scripts/verify_stack.py                 # everything, including paid model calls
+python scripts/verify_stack.py --no-models     # free: credentials, data APIs, warehouse
+python scripts/verify_stack.py --layer data    # one layer
+```
+
+One command that exercises every external dependency: six credentials, four
+government APIs, two model providers, the local warehouse, the tool surface,
+and the whole pipeline from graph run through report to traceability walk.
+
+Two deliberate choices:
+
+- **It calls the project's own adapters, not raw HTTP.** A probe that bypasses
+  the code under test confirms the vendor is up, not that this application can
+  talk to it. Both of the bugs this exercise found were in the seam between the
+  two, which a raw-HTTP probe would have missed entirely.
+- **`SKIP` is not `PASS`.** A check that could not run is reported as such,
+  with the reason, and the summary states that skips are not passes. Reporting
+  an unrunnable check as green is how a broken dependency hides. Exit code is
+  non-zero only on `FAIL`, so it is usable as a gate.
+
 ## Known data limitations
 
 These constrain what the prototype may claim, and are repeated in the report:

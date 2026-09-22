@@ -40,6 +40,9 @@ from warehouse.session import Principal, connect
 
 DOC = "tools_doc"
 SOC = "13-2051.00"
+# The benchmark keys on the 6-digit SOC; O*NET task statements carry the
+# 8-digit detail code. Two code systems, as in production.
+SOC_6DIGIT = "13-2051"
 LONG_QUOTE = ("We do not make predictions about the development or adoption "
               "timeline of such large language models.")
 
@@ -572,3 +575,34 @@ def test_consumption_is_written_to_run_source_binding(tools_db, tracker):
     assert {r[0] for r in rows} == {"task_source", "adoption_evidence",
                                     "claim_evidence"}
     assert all(r[1] == DOC for r in rows)
+
+
+def test_a_benchmark_miss_on_an_onet_code_names_the_code_system(tools_db):
+    """A zero result must not assert an absence that is false.
+
+    VW_ROLE_TASKS carries O*NET's 8-digit codes; the AIOE benchmark keys on the
+    6-digit SOC. A caller passing the task-style code gets zero rows even
+    though a benchmark exists, and the note used to say "No published benchmark
+    for this occupation" -- wrong, and wrong in the direction that matters,
+    because a reader would record the run as uncalibrated for the wrong reason.
+    """
+    tools = EvidenceTools(tracker=ConsumptionTracker(run_id="soc-note"),
+                          database=tools_db)
+
+    result = tools.get_exposure_benchmarks(f"{SOC_6DIGIT}.00")
+
+    assert result.row_count == 0
+    assert SOC_6DIGIT in result.note
+    assert "6-digit" in result.note
+    assert "No published benchmark for this occupation" not in result.note
+
+
+def test_a_genuine_absence_still_reads_as_an_absence(tools_db):
+    """The mismatch note must not fire when there really is no benchmark."""
+    tools = EvidenceTools(tracker=ConsumptionTracker(run_id="soc-note-2"),
+                          database=tools_db)
+
+    result = tools.get_exposure_benchmarks("99-9999.00")
+
+    assert result.row_count == 0
+    assert "No published benchmark for this occupation" in result.note

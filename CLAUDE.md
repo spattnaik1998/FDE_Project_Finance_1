@@ -795,3 +795,56 @@ workstream — but the appendix makes it customer-visible, so claim selection is
 worth a pass before any external delivery.
 
 Next: W8, the Streamlit presentation tier.
+
+---
+
+## Full-stack verification (2026-09-22)
+
+Before starting W8 you asked for proof that every configured API actually
+works. `scripts/verify_stack.py` is the repeatable answer: six credentials,
+four government APIs, two model providers, the warehouse, the tool surface,
+and the pipeline from graph run to traceability walk. **18 pass, 0 fail,
+2 skip.**
+
+| Layer | Result |
+|---|---|
+| Credentials | 2/2 — all six resolve from `.env`, precedence holds over the stale machine variable |
+| Government APIs | 4/4 live, 1 skip — BLS, BEA, Census, FRED, through the project's own adapters |
+| Model providers | 4/4 — `gpt-6-astra` strict `json_schema`, `claude-opus-5` forced tool use, vendors disjoint |
+| Warehouse | 3/3, 1 skip — five views populated, six tools returning provenanced rows |
+| Pipeline | 5/5 — 28 calls, 30,738 tokens, 164 figures traced, chain complete |
+
+Two design choices in the script: it calls **the project's adapters rather than
+raw HTTP**, because a probe that bypasses the code under test proves only that
+the vendor is up; and **`SKIP` is never reported as `PASS`**, because an
+unrunnable check rendered green is how a broken dependency hides.
+
+**The real finding: the benchmark tool was lying about a miss.**
+`VW_ROLE_TASKS` carries O*NET's 8-digit codes (`13-2051.00`); the AIOE
+benchmark keys on the 6-digit SOC (`13-2051`). A caller passing the task-style
+code got zero rows and the note read *"No published benchmark for this
+occupation"* — false, and false in the direction that matters, because a
+downstream reader would record the occupation as unbenchmarked and the run as
+uncalibrated for a reason that is not the real one. `retrieval._benchmark_soc`
+normalises correctly so no run was ever wrong, but any new caller — W8's
+presentation tier being the obvious one — would have walked into it. The note
+now names the code-system mismatch and says which code to query. Two tests:
+the mismatch, and a genuine absence that must still read as an absence.
+
+Same defect class as the null-vs-zero coercion in W7: a value that is wrong
+about *why* it is empty. Worth watching for as a pattern.
+
+**Run-to-run variation worth recording.** Exposure came out **0.380** against
+W5's 0.384 on identical evidence — classifier non-determinism, ~1%. The lag was
+**byte-identical** (5.0 / 10.07 / 30.0), which is the independence property
+demonstrated again for free: swapping classifications moves exposure and cannot
+move the lag.
+
+The two skips are honest gaps, both needing you:
+1. **BLS v2 key still rejected** — the adapter falls back to keyless v1 and
+   logs it. Free re-registration.
+2. **The "agent cannot read a base table" guardrail cannot be verified** —
+   mixed-mode auth is off, so the check runs as the developer fallback rather
+   than `USR_FDE_RO`. The script says so rather than passing. This is the
+   single most valuable of the outstanding environment items: 29 privilege
+   tests plus this guardrail all become real the moment it is enabled.
