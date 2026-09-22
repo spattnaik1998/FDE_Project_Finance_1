@@ -372,13 +372,78 @@ def verify_pipeline(report: Report, *, with_models: bool) -> None:
 
 
 # ===========================================================================
+# 6. Presentation tier
+# ===========================================================================
+
+def verify_ui(report: Report) -> None:
+    header("6. PRESENTATION TIER  —  renders a persisted run, loopback only")
+
+    @check(report, "ui", "gateway builds a view from a persisted run")
+    def _():
+        from app.gateway import NoRunAvailable, load_view
+        try:
+            view = load_view()
+        except NoRunAvailable as exc:
+            return SKIP, str(exc)[:90]
+        return (f"run={view.run_id[:8]} status={view.status} "
+                f"figures={len(view.figures)} traced={view.trace_figures}")
+
+    @check(report, "ui", "app executes in Streamlit's runtime")
+    def _():
+        try:
+            from streamlit.testing.v1 import AppTest
+        except Exception as exc:                 # noqa: BLE001
+            return SKIP, f"AppTest unavailable: {type(exc).__name__}"
+        app = AppTest.from_file("src/app/streamlit_app.py", default_timeout=180)
+        app.run()
+        if app.exception:
+            return FAIL, "; ".join(str(e.value) for e in app.exception)[:140]
+        if app.error:
+            return FAIL, "; ".join(str(e.value) for e in app.error)[:140]
+        return (f"{len(app.subheader)} sections, {len(app.metric)} metrics, "
+                f"{len(app.dataframe)} tables, {len(app.warning)} warnings, "
+                f"0 errors")
+
+    @check(report, "ui", "bound to loopback only, if running")
+    def _():
+        """The perimeter claim, probed rather than trusted.
+
+        Checks a live server if one is up: reachable on 127.0.0.1 and refused
+        on this machine's LAN address. A bind to 0.0.0.0 would publish a
+        customer-facing analysis, served without authentication, to the
+        local network.
+        """
+        import socket
+        import urllib.error
+        import urllib.request
+
+        def reachable(host: str, timeout: float = 3.0) -> bool:
+            with socket.socket() as probe:
+                probe.settimeout(timeout)
+                return probe.connect_ex((host, 8501)) == 0
+
+        if not reachable("127.0.0.1"):
+            return SKIP, ("no server on 127.0.0.1:8501; start it with "
+                          "`python scripts/run_ui.py`")
+
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as finder:
+            finder.connect(("8.8.8.8", 80))
+            lan = finder.getsockname()[0]
+
+        if lan != "127.0.0.1" and reachable(lan, timeout=2.0):
+            return FAIL, (f"also reachable on {lan}:8501 -- the app is NOT "
+                          f"loopback-bound and is exposed to the network")
+        return f"reachable on 127.0.0.1:8501, refused on {lan}:8501"
+
+
+# ===========================================================================
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-models", action="store_true",
                         help="Skip paid model calls and the pipeline run")
     parser.add_argument("--layer", choices=["creds", "data", "models", "db",
-                                            "pipeline"], default=None)
+                                            "pipeline", "ui"], default=None)
     args = parser.parse_args()
 
     report = Report()
@@ -399,10 +464,12 @@ def main() -> int:
         verify_database(report)
     if want("pipeline"):
         verify_pipeline(report, with_models=not args.no_models)
+    if want("ui"):
+        verify_ui(report)
 
     counts = report.counts()
     header("SUMMARY")
-    for layer in ("creds", "data", "models", "db", "pipeline"):
+    for layer in ("creds", "data", "models", "db", "pipeline", "ui"):
         rows = [r for r in report.results if r.layer == layer]
         if rows:
             ok = sum(1 for r in rows if r.status == PASS)
