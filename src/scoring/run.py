@@ -230,9 +230,13 @@ def persist_verdict(cursor: pyodbc.Cursor, context: RunContext,
              delta, within_tolerance, outcome, explanation)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         context.run_id, cal.benchmark_measure,
-        cal.benchmark_percentile if cal.benchmark_percentile is not None else 0.0,
-        cal.our_percentile if cal.our_percentile is not None else 0.0,
-        cal.delta if cal.delta is not None else 0.0,
+        # NOT coerced to 0.0. These were NOT NULL columns and the writer used
+        # to substitute zero for an absent value, which persisted "our
+        # percentile 0.00, delta 0.00" on every single-occupation run -- a
+        # score at the 0th percentile in perfect agreement with a benchmark it
+        # is simultaneously recorded as disagreeing with. An unidentifiable
+        # comparison is NULL; it is not zero.
+        cal.benchmark_percentile, cal.our_percentile, cal.delta,
         1 if cal.within_tolerance else 0, cal.outcome.value, cal.explanation)
 
 

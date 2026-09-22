@@ -293,9 +293,11 @@ BEGIN
     CREATE TABLE score.calibration (
         run_id                UNIQUEIDENTIFIER NOT NULL,
         benchmark_measure     NVARCHAR(64)  NOT NULL,
-        benchmark_percentile  DECIMAL(5,2)  NOT NULL,
-        our_percentile        DECIMAL(5,2)  NOT NULL,
-        delta                 DECIMAL(5,2)  NOT NULL,
+        /* NULL where the comparison is not identifiable -- see the ALTER
+           below for why this is not NOT NULL with a 0.00 default. */
+        benchmark_percentile  DECIMAL(5,2)  NULL,
+        our_percentile        DECIMAL(5,2)  NULL,
+        delta                 DECIMAL(5,2)  NULL,
         within_tolerance      BIT           NOT NULL,
         outcome               NVARCHAR(24)  NOT NULL,
         explanation           NVARCHAR(MAX) NULL,
@@ -351,6 +353,30 @@ IF EXISTS (SELECT 1 FROM sys.columns
 BEGIN
     ALTER TABLE audit.AgentAuditLog ALTER COLUMN status NVARCHAR(32) NULL;
     PRINT 'Widened audit.AgentAuditLog.status to NVARCHAR(32)';
+END
+GO
+
+/* score.calibration.our_percentile / benchmark_percentile / delta were
+   NOT NULL, which forced the writer to coerce an absent value to 0.00. On a
+   single-occupation run our percentile is genuinely UNIDENTIFIABLE -- a
+   percentile is a rank within a distribution, and one score has no rank -- so
+   the coercion persisted "0.00" and "delta 0.00" where the truth was "no
+   comparison is possible". Rendered, that reads as a score at the 0th
+   percentile in perfect agreement with the benchmark, while the same row says
+   it is outside tolerance. A null coerced into a number that reads as a
+   finding is exactly what this schema exists to prevent, so the columns now
+   admit NULL and the writer stores NULL.
+
+   within_tolerance stays NOT NULL: it is a decision, and the decision on an
+   unidentifiable comparison is a definite "no". */
+IF EXISTS (SELECT 1 FROM sys.columns
+           WHERE object_id = OBJECT_ID('score.calibration')
+             AND name = 'our_percentile' AND is_nullable = 0)
+BEGIN
+    ALTER TABLE score.calibration ALTER COLUMN our_percentile       DECIMAL(5,2) NULL;
+    ALTER TABLE score.calibration ALTER COLUMN benchmark_percentile DECIMAL(5,2) NULL;
+    ALTER TABLE score.calibration ALTER COLUMN delta                DECIMAL(5,2) NULL;
+    PRINT 'Made score.calibration percentile columns nullable (unidentifiable <> zero)';
 END
 GO
 

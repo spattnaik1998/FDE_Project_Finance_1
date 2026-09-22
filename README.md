@@ -565,6 +565,103 @@ report is produced. Scoring several occupations is what unblocks this — not a
 change to the gate. The test exists so that limitation cannot drift out of the
 documentation unnoticed.
 
+## Report and provenance (W7 — complete)
+
+```bash
+python scripts/generate_report.py                    # latest run with a verdict
+python scripts/generate_report.py --out report.md
+python scripts/generate_report.py --run-id <uuid> --quiet
+```
+
+Seven sections, rendered **deterministically from persisted rows** — no model
+is involved. Exposure and lag appear as two separate findings and are never
+combined into a single score.
+
+### Two artefacts, not one
+
+The TDD withholds the *automatic narrative* on `review_required`. It does not
+withhold the analysis from the human the run was halted for — "halts for human
+review" presupposes something to review. So:
+
+| Artefact | Produced when | Written by |
+|---|---|---|
+| Synthesis **narrative** | `pass` only | the model, figure-guarded |
+| Technical **report** | any run reaching a verdict | deterministic renderer |
+
+The gate protects model prose. Rendered data carries no fabrication risk, so
+gating it would withhold the analysis from the reviewer without buying
+anything. What the report does instead is lead with the standing: a run that
+did not calibrate says so in section 1, before any figure.
+
+### Provenance by construction, not by inspection
+
+`report/figures.py` is the only way to put a number into the document.
+`emit()` refuses to render a figure that cannot name a source document, so an
+unprovenanced number is not "caught" — it is unrenderable.
+
+That is the opposite of `nodes/figure_guard.py`, and deliberately so. There a
+*model* writes the prose, so numbers must be audited after the fact. Here the
+renderer is ours, so provenance is a precondition. A failure in the guard means
+a model fabricated; a failure here means the renderer has a bug.
+
+Numbers inside persisted prose (`lag_basis`, caveats, publisher strings) are
+registered too, against the column that holds them. Exempting prose would have
+made the scan meaningless — anything could be smuggled in as a sentence.
+
+### The traceability walk
+
+`report/provenance.py` walks every figure:
+
+```
+figure -> score.* row -> audit.run_source_binding -> ref.source_document -> SHA-256
+```
+
+Four break modes, reported separately because they mean different things:
+
+| Break | Meaning |
+|---|---|
+| `unregistered` | a number in the document the renderer never registered |
+| `unbound` | a figure citing a source **this run** never consumed |
+| `unhashed` | a bound source with no usable digest |
+| `unverified_mirror` | chain complete, but terminates at an unchecked copy |
+
+Only the first three break the walk. A mirror is a qualification: it blocks
+`customer_deliverable` without invalidating the document.
+
+**On the real warehouse: 126 figures traced, 0 unregistered, 0 unbound,
+0 unhashed, 1 unverified mirror** (the Felten AIOE benchmark, which is a known
+mirror and is flagged in section 1 rather than buried).
+
+The `unregistered` check reads the **rendered text**, not the registry, so it
+catches a renderer that bypasses the registry entirely. Checking the registry
+against itself would be the vacuous version of this test.
+
+### Verbatim quotes reach the customer
+
+The appendix resolves claim evidence to its **verbatim quote and page** — the
+project's rule that a prose-derived claim is never paraphrased, applied at the
+point it matters. It also states its own binding granularity:
+`audit.run_source_binding` records the *artefact* a tool returned a row from,
+not the individual quote read, so the trace is source-level and says so.
+Implying a finer trace than exists would be the subtle form of overclaiming.
+
+### Two bugs the walk caught that review would not have
+
+1. **Truncation manufactured a figure.** The renderer registered the full
+   quote but rendered a shortened one, so cutting "2025" mid-token left a bare
+   "25" in the document that was in no source. Registration now happens on the
+   *shortened* string, and `_shorten` falls back to a whitespace boundary.
+2. **A benchmark cited without a binding.** The report wanted to print the
+   benchmark percentile on a run that never bound an `exposure_benchmark`
+   source. The figure is now withheld and the absence stated — a number that
+   cannot be traced to an artefact *this run consumed* is unsupported for this
+   run even when it is correct in general.
+
+Code spans are skipped, because they hold identifiers (`doc_id`, digests, run
+ids) rather than findings — and `test_no_code_span_is_purely_numeric` closes
+the loophole that would otherwise open, so a figure cannot be smuggled in by
+wrapping it in backticks.
+
 ## Known data limitations
 
 These constrain what the prototype may claim, and are repeated in the report:

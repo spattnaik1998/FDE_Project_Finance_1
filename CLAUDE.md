@@ -712,3 +712,86 @@ only hide it. `NodeDeps.our_percentile` exists solely so the pass path stays
 testable, and is `None` in production.
 
 Next: W7, the customer-facing report and provenance appendix.
+
+---
+
+## W7 complete — report and provenance (2026-09-22)
+
+565 tests pass, 29 skip with stated reasons (54 new in `tests/test_report.py`); three consecutive full-suite runs plus a forced-order run, all clean. Branch `feat/p7-report-provenance`.
+
+Seven sections, rendered deterministically from persisted rows. No model
+involved. Exposure and lag appear as separate findings and are never combined.
+
+**Decision taken, and it changed the TDD's reading.** The TDD says
+`review_required` yields "no automatic report". You asked for the report to
+render that state instead, on long-term grounds, and that is right — but the
+reconciliation matters more than the choice. The gate withholds *model prose*,
+not rendered data, and "halts for human review" presupposes an artefact for the
+human to review. So there are now two outputs: the **narrative** (model-written,
+`pass` only, unchanged) and the **technical report** (deterministic, any run
+reaching a verdict). The report leads with its own standing, so an uncalibrated
+run says so in section 1 before any figure appears.
+
+**Provenance is a precondition, not an audit.** `report/figures.py` is the only
+way to put a number in the document, and it refuses a figure that cannot name a
+source. This deliberately inverts `nodes/figure_guard.py`: there a *model*
+writes the prose so numbers are checked afterwards; here the renderer is ours,
+so an unprovenanced number is unrenderable rather than caught. The two failure
+modes mean different things — a guard failure is a model fabricating, a
+registry failure is a renderer bug.
+
+**The traceability walk** (`report/provenance.py`) takes every figure through
+`score.*` → `audit.run_source_binding` → `ref.source_document` → SHA-256, and
+separates four break modes. Only three break it; an unverified mirror is a
+qualification that blocks customer delivery without invalidating the document.
+Against the real warehouse: **126 figures traced, 0 unregistered, 0 unbound,
+0 unhashed, 1 unverified mirror** (Felten AIOE, flagged in section 1).
+
+Two design points that keep the walk from being decorative:
+- `unregistered` is checked against the **rendered text**, not the registry, so
+  it catches a renderer bypassing the registry. Checking the registry against
+  itself would pass vacuously.
+- Code spans are skipped because they hold identifiers, and
+  `test_no_code_span_is_purely_numeric` closes the hole that opens — a figure
+  cannot be smuggled in by wrapping it in backticks.
+
+**A latent defect, found by building the renderer.**
+`score.calibration.our_percentile`, `benchmark_percentile` and `delta` were
+`NOT NULL`, so `persist_verdict` substituted `0.0` for an absent value. Every
+single-occupation run had therefore been persisting **"our percentile 0.00,
+delta 0.00"** — a score at the bottom of the distribution in exact agreement
+with a benchmark the same row records it as failing to match. It had sat there
+since W2 because nothing rendered calibration until now. The columns now admit
+NULL, the writer stores NULL, and the six affected development rows were
+corrected; all six were provably coerced, since a real computation against a
+benchmark of 86.82 cannot yield a delta of zero. Guarded at the real write path
+by `test_persist_verdict_writes_null_not_zero_for_an_absent_percentile`.
+
+Worth noting: that correction ran as the developer fallback. `db_fde_score`
+holds `DENY UPDATE ON score.calibration`, so once mixed-mode auth is enabled
+the same statement would be refused — the guardrail behaving exactly as
+designed.
+
+**Two bugs the walk caught that a reviewer would not have.**
+1. *Truncation manufactured a figure.* The renderer registered the full quote
+   and rendered a shortened one, so cutting "2025" mid-token left a bare "25"
+   in the document that appeared in no source. What is registered is now
+   exactly what is rendered, and `_shorten` falls back to a whitespace
+   boundary.
+2. *A benchmark cited without a binding.* The report wanted to print the
+   benchmark percentile on a run that never bound an `exposure_benchmark`
+   source. The figure is withheld and the absence stated — a number that cannot
+   be traced to an artefact *this run consumed* is unsupported for this run
+   even when it is correct in general.
+
+The appendix also resolves claim evidence to verbatim quote plus page, and
+states its own binding granularity: `run_source_binding` records the artefact,
+not the individual quote, so the trace is source-level and says so.
+
+**Visible now that the quotes are rendered:** some extracted claims are
+low-value (a dedication line, a JEL-code block) because the PDF extraction
+takes the first matching passages. Not a W7 defect — it predates this
+workstream — but the appendix makes it customer-visible, so claim selection is
+worth a pass before any external delivery.
+
+Next: W8, the Streamlit presentation tier.
