@@ -14,3 +14,15 @@ pypdf==6.1.1
 pytest==9.0.3
 python-dotenv==1.2.2
 requests==2.34.2
+
+# Presentation tier. Held at 1.49.1 deliberately: it is the last tornado-based
+# release and requires no starlette, so it does not collide with the
+# starlette<0.39 pin that fastapi imposes in this environment. Streamlit 1.57
+# requires starlette>=0.40 and could not import here at all. langgraph itself
+# never depended on starlette -- only langgraph-api, which this project does
+# not use.
+#
+# 1.49.1 declares pillow<12; that cap was tested and does not bite. It runs on
+# pillow 12.3.0, which is pinned above because another package on this machine
+# needs >=12.1.1. Verified by running the app, not by reading the metadata.
+streamlit==1.49.1

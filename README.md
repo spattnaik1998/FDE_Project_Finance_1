@@ -662,6 +662,74 @@ ids) rather than findings — and `test_no_code_span_is_purely_numeric` closes
 the loophole that would otherwise open, so a figure cannot be smuggled in by
 wrapping it in backticks.
 
+## Presentation tier (W8 — complete)
+
+```bash
+python scripts/run_ui.py                  # http://127.0.0.1:8501
+python scripts/verify_stack.py --layer ui # gateway, runtime, loopback binding
+```
+
+Eight sections in the browser, rendering a run that already happened. Standing
+first, provenance last, exposure and lag never combined.
+
+### Four modules, one boundary
+
+| Module | Role | May touch the warehouse |
+|---|---|---|
+| `app/gateway.py` | application-tier facade; loads, renders, walks the trace | **yes** |
+| `app/view_model.py` | plain strings and booleans — the boundary object | no |
+| `app/blocks.py` | what to show, as data | no |
+| `app/streamlit_app.py` | dispatcher: one block → one `st.*` call | no |
+
+The UI receives a `ReportView` and has nothing else to work with. The tiers are
+logical and co-located in one process (TDD 4.1, "in-process call"), so nothing
+*physically* stops a UI module opening a cursor — what stops it is
+`test_the_ui_module_cannot_reach_the_database`, which parses the module and
+fails on a database import or a SQL keyword. Adding the coupling requires
+deleting the test.
+
+### Renders no figure it did not receive
+
+Every number reaches the page as a string on the view model, formatted upstream
+by the report's figure registry — which already refused to produce any figure
+lacking provenance. `test_the_ui_displays_no_figure_the_view_model_did_not_carry`
+walks every block, extracts every numeric literal and asserts it came from the
+view model. It reuses `report.provenance._is_furniture`, so "what counts as
+document furniture" has one definition rather than two that can drift.
+
+Backed by `test_no_block_performs_arithmetic`, an `ast` check that
+`app/blocks.py` contains no `-`, `*`, `/`, `//`, `**` or `%`. A presentation
+layer that could compute could produce a figure that is on no source, and the
+figure test would have nothing to catch it with.
+
+**Opening the page cannot change a number.** There is no path here that scores,
+refits or calls a model — asserted for both the UI and the gateway.
+
+### Proven to run, not just to be well-formed
+
+Structural tests establish the boundary; they cannot establish that the blocks
+reach real `st.*` calls without raising. Six tests use Streamlit's `AppTest`
+harness to execute the actual script headlessly: **8 sections, 12 metrics,
+3 tables, 2 warnings, 0 errors, no exception.** They skip with a stated reason
+when no run has been scored.
+
+### The perimeter, probed
+
+`scripts/run_ui.py` binds `127.0.0.1:8501`. Verified live rather than assumed:
+reachable on loopback, **connection refused on the machine's LAN address**. A
+`--host` override exists and prints a loud warning, because the app serves a
+customer-facing analysis with no authentication in front of it.
+
+### Environment note
+
+Streamlit 1.57 was installed but **could not import** — it requires
+`starlette>=0.40` while `fastapi` pins `<0.39`. Pinned to **1.49.1**, the last
+tornado-based release, which needs no starlette at all, so the conflict
+disappears instead of moving. `langgraph` itself never depended on starlette
+(only `langgraph-api`, which this project does not use). Its conservative
+`pillow<12` cap was tested and does not bite: 1.49.1 runs on pillow 12.3.0,
+which keeps an unrelated package of the user's working.
+
 ## Stack verification
 
 ```bash

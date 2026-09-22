@@ -1,0 +1,145 @@
+"""The boundary object between the application tier and the UI.
+
+Everything here is a plain value: strings already formatted, numbers already
+rounded, booleans already decided. No database handle, no live connection, no
+model client. The UI receives one of these and renders it.
+
+That is what makes "the presentation tier does not touch the database"
+enforceable rather than aspirational. The tiers are logical and co-located in a
+single process (TDD 4.1, "in-process call"), so nothing physically stops a UI
+module from opening a cursor. What stops it is that the UI is handed a
+:class:`ReportView` and has nothing else to work with --- and
+``tests/test_app.py`` parses the UI module and fails if it imports a database
+library or contains SQL.
+
+The second rule is that the UI **renders no figure it did not receive**. Every
+number a viewer sees is a string on this object, formatted upstream by the
+report renderer's figure registry, which already refused to produce any figure
+lacking provenance. The UI does no arithmetic, so it cannot invent a quantity
+and cannot round one into a different claim.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+
+@dataclass(frozen=True)
+class TaskRowView:
+    """One row of the per-task table, pre-formatted."""
+
+    statement: str
+    raw: str
+    tacit: str
+    adjusted: str
+    direction: str
+    confidence: str
+
+
+@dataclass(frozen=True)
+class SourceView:
+    """One artefact in the provenance panel."""
+
+    doc_id: str
+    title: str
+    publisher: str
+    url: str
+    format: str
+    sha256: str
+    used_as: str
+    is_unverified_mirror: bool
+
+    @property
+    def short_digest(self) -> str:
+        return f"{self.sha256[:16]}…" if self.sha256 else "(no digest)"
+
+
+@dataclass(frozen=True)
+class ClaimView:
+    """One prose-derived claim, with the verbatim quote and its page."""
+
+    claim_id: str
+    topic: str
+    quote: str
+    page: str
+    source_doc_id: str
+
+
+@dataclass(frozen=True)
+class StandingView:
+    """How much weight the document can carry, said plainly."""
+
+    headline: str
+    meaning: str
+    tone: str                 # 'ok' | 'warn' | 'stop'
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class ReportView:
+    """Everything the UI is allowed to display.
+
+    ``figures`` is the set of every numeric literal that legitimately appears,
+    carried so a test can assert the UI displayed nothing outside it.
+    """
+
+    run_id: str
+    status: str
+    soc_code: str
+    occupation_title: str
+    generated_on: str
+
+    standing: StandingView
+
+    exposure_index: str
+    weight_source: str
+    weighting_note: str
+    tasks_scored: str
+
+    lag_p10: str
+    lag_p50: str
+    lag_p90: str
+    lag_basis: str
+    lag_grounding: str
+    curve_fitted: bool
+
+    calibration_outcome: str
+    calibration_is_identifiable: bool
+    benchmark_measure: str
+    benchmark_percentile: str
+    our_percentile: str
+    delta: str
+
+    direction_augment: str
+    direction_substitute: str
+    direction_unclear: str
+
+    tasks: tuple[TaskRowView, ...] = ()
+    sources: tuple[SourceView, ...] = ()
+    claims: tuple[ClaimView, ...] = ()
+    caveats: tuple[str, ...] = ()
+
+    trace_figures: str = "0"
+    trace_complete: bool = False
+    trace_customer_deliverable: bool = False
+    trace_detail: str = ""
+
+    git_sha: str = ""
+    rubric_version: str = ""
+    calibration_policy_version: str = ""
+    is_customer_deliverable: bool = False
+
+    figures: frozenset[str] = field(default_factory=frozenset)
+    markdown: str = ""
+
+    @property
+    def unverified_mirrors(self) -> tuple[SourceView, ...]:
+        return tuple(s for s in self.sources if s.is_unverified_mirror)
+
+    @property
+    def lag_interval(self) -> str:
+        return f"{self.lag_p10} – {self.lag_p90} years (median {self.lag_p50})"
+
+    @property
+    def has_warnings(self) -> bool:
+        return bool(self.unverified_mirrors) or not self.trace_complete

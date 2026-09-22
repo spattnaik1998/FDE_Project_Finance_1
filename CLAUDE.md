@@ -848,3 +848,63 @@ The two skips are honest gaps, both needing you:
    than `USR_FDE_RO`. The script says so rather than passing. This is the
    single most valuable of the outstanding environment items: 29 privilege
    tests plus this guardrail all become real the moment it is enabled.
+
+---
+
+## W8 complete — presentation tier (2026-09-22)
+
+612 tests pass, 29 skip with stated reasons (45 new in `tests/test_app.py`); three consecutive full-suite runs plus a forced-order run, all clean. Branch `feat/p8-presentation-tier`.
+
+Eight sections in the browser at `127.0.0.1:8501`, rendering a run that already
+happened. Standing first, provenance last, exposure and lag never combined.
+
+**Four modules, one boundary.** `gateway.py` is the application-tier facade and
+is the only one allowed to reach the warehouse. `view_model.py` is the boundary
+object — plain strings and booleans, no handles. `blocks.py` says what to show,
+as data. `streamlit_app.py` is a dispatcher: one block, one `st.*` call.
+
+The tiers are logical and co-located in one process (TDD 4.1, "in-process
+call"), so nothing *physically* stops a UI module opening a cursor. What stops
+it is `test_the_ui_module_cannot_reach_the_database`, which parses the module
+and fails on a database import or a SQL keyword. Same technique as W3's no-SDK
+rule and W4's no-base-table rule.
+
+**Renders no figure it did not receive**, enforced two ways:
+- Every numeric literal on the page is walked back to the view model, which
+  carries only literals the report's figure registry produced — and the
+  registry already refused any figure without provenance. The chain now runs
+  from a hashed artefact to a pixel.
+- `test_no_block_performs_arithmetic` parses `blocks.py` and fails on any
+  `-`, `*`, `/`, `//`, `**`, `%`. A presentation layer that could compute could
+  produce a figure that is on no source, and the figure test would have nothing
+  to catch it with.
+
+Reuses `report.provenance._is_furniture` rather than defining a second rule for
+what counts as document furniture. One definition, no drift.
+
+**Proven to run, not just well-formed.** Structural tests cannot establish that
+the blocks reach real `st.*` calls without raising, so six tests execute the
+actual script through Streamlit's `AppTest` harness: **8 sections, 12 metrics,
+3 tables, 2 warnings, 0 errors, no exception.** They skip with a stated reason
+when nothing has been scored. Checking that the test was non-vacuous mattered —
+it runs in 1.6s, which looked too fast until confirmed against a standalone run.
+
+**The perimeter was probed, not assumed.** `run_ui.py` binds loopback;
+verified live as reachable on `127.0.0.1:8501` and **connection refused on the
+machine's LAN address**. Now a standing check in `verify_stack.py --layer ui`.
+A `--host` override exists and warns loudly, because the app serves a
+customer-facing analysis with no authentication in front of it.
+
+**Environment problem found and fixed.** Streamlit 1.57 was installed but
+**could not import at all** — it needs `starlette>=0.40` while `fastapi` pins
+`<0.39`. Pinned to **1.49.1**, the last tornado-based release, which requires no
+starlette, so the conflict disappears rather than moving to another package.
+`langgraph` itself never depended on starlette; only `langgraph-api`, which this
+project does not use. Its conservative `pillow<12` cap was *tested* rather than
+obeyed: 1.49.1 runs fine on pillow 12.3.0, which matters because an unrelated
+package of yours needs `>=12.1.1`. Pinned in `requirements.txt` with the
+reasoning, so nobody upgrades back into the broken state.
+
+Next: W8 was the last workstream in `docs/build_plan.md`. The build plan is
+complete; what remains is the environment work only you can do, and a second
+occupation to make calibration identifiable.
