@@ -437,6 +437,79 @@ Audit entries:   6
 and **says so in the result** — "lexically different phrasings of the same
 idea will be missed." Adequate at 21 claims, not beyond.
 
+## Orchestration nodes (W5 — complete)
+
+```bash
+python scripts/run_orchestrated.py            # full run, real models
+python scripts/run_orchestrated.py --limit 4  # cheaper trial
+```
+
+Four model nodes plus a deterministic retrieval step, each a plain function
+over `RunState` so it is testable alone. Graph assembly is W6.
+
+| Node | Vendor | Refusal it enforces |
+|---|---|---|
+| 1. Intent & Scope | Anthropic | An unpublished occupation halts the run; **never** substitutes a neighbour |
+| 2. Evidence Retrieval | — (tools) | No tasks retrieved → fail, rather than an index over zero tasks |
+| 3A. Task Classifier | OpenAI | Categories only; invented citations dropped; `unclear` carried forward, not re-prompted |
+| 4. Review Gate | Anthropic | Cannot upgrade a rejected calibration; an unavailable gate rejects |
+| 5. Synthesis | OpenAI | No figure or citation absent from the evidence; two bad drafts → **no narrative** |
+
+### Did the model beat the baseline?
+
+The plan's standard was that the classifier must beat keyword matching
+*meaningfully*, or it is adding cost rather than judgment. Both were run over
+the same 26 tasks:
+
+| | Baseline (keyword) | Model (`gpt-6-astra`) |
+|---|---|---|
+| Exposure index | 0.541 | **0.384** |
+| Direction resolved | 0 of 26 | **14 of 26** |
+| …as `augment` | 0 | 14 |
+| …as `substitute` | 0 | **0** |
+| Low confidence | 26 of 26 | **0** |
+| Cited evidence | 0 | **14** |
+| Lag interval | 5.0 / 10.07 / 30.0 | 5.0 / 10.07 / 30.0 |
+
+**Yes, on the field that matters.** The baseline cannot tell augmentation from
+substitution and says so on every task; the model resolves it on 54% of them
+and cites evidence while doing it. Note the zero in the `substitute` row — the
+model independently landed on the augmentation reading, which is what the
+survey prior supports (47.2% of adopting finance firms reported skill levels
+rising against 1.6% falling).
+
+The lower index is a *consequence*, not the improvement: the model applies
+higher tacitness than keyword matching, which is the direction Polanyi's bound
+predicts. It is not evidence that 0.384 is "more accurate" than 0.541, and the
+report does not claim that.
+
+Cost of the difference: **28 model calls, 30,047 tokens, 3.4 minutes.**
+
+### The lag is identical, in a live run
+
+`baseline lag identical: True`. Exposure and lag are computed on independent
+paths, and swapping the entire classification layer left the lag interval
+byte-identical. The property is enforced structurally in
+`tests/test_independence.py` and now demonstrated end to end.
+
+### The gate articulated its own reasoning correctly
+
+It emitted `review_required` and named the cause: *"our percentile is None, so
+the benchmark percentile of 86.82 has no counterpart to compare against. This
+is an unidentifiable comparison, not a numeric disagreement."* That is exactly
+the distinction the three-state gate exists for. **No narrative was produced**,
+because `review_required` does not yield a report.
+
+### The fabrication guard
+
+`nodes/figure_guard.py` builds an allow-set from the verdict, the task scores
+and the evidence rows, extracts every number from a draft, and rejects anything
+left over. Calibrated in both directions: it catches an invented percentage, an
+invented year and an invented headcount, and does **not** fire on "three
+caveats", on 0.54 rounded from 0.541, or on a share quoted as a percentage. A
+guard that fires on ordinary English gets switched off, and a guard that is off
+catches nothing.
+
 ## Known data limitations
 
 These constrain what the prototype may claim, and are repeated in the report:
