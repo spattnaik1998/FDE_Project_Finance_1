@@ -146,7 +146,7 @@ def run(state: RunState, deps: NodeDeps) -> RunState:
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
             duration_ms=response.duration_ms,
-            status="ok" if ok else "rejected_unsourced_figure")
+            status="ok" if ok else "rejected_figure")
 
         if ok:
             state.narrative = narrative

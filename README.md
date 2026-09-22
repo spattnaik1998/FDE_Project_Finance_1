@@ -510,6 +510,61 @@ caveats", on 0.54 rounded from 0.541, or on a share quoted as a percentage. A
 guard that fires on ordinary English gets switched off, and a guard that is off
 catches nothing.
 
+## Graph assembly (W6 — complete)
+
+```bash
+python scripts/run_graph.py --topology-only   # print the graph; no model calls, no cost
+python scripts/run_graph.py                   # full run through LangGraph
+```
+
+W5 chained the nodes by hand. W6 hands control to LangGraph, so the two claims
+the architecture rests on stop being prose and become topology:
+
+```
+__start__          -> intent_scope
+intent_scope       -> evidence_retrieval
+evidence_retrieval -> exposure_path        \  the fan-out
+evidence_retrieval -> lag_path             /
+exposure_path      -> assemble_verdict     \  the fan-in
+lag_path           -> assemble_verdict     /
+assemble_verdict   -> review_gate
+review_gate        -> synthesis
+synthesis          -> __end__
+```
+
+`src/graph/build.py` exposes `edges()`, `reaches()` and
+`concurrent_write_conflicts()` read from the **compiled** graph, so the tests
+assert against what was actually built rather than a hand-drawn picture of it.
+
+### Independence, now enforced at a fourth level
+
+`tests/test_independence.py` already proved it behaviourally, through the
+interface, and structurally by parsing `lag.py` with `ast`. The graph adds:
+
+- `reaches(EXPOSURE_PATH, LAG_PATH)` is `False`, and so is the reverse — there
+  is no path through the graph from one to the other.
+- `NODE_WRITES` declares field ownership, and
+  `concurrent_write_conflicts()` is asserted empty. The two branches run in the
+  same superstep; a shared field would couple them through the state object
+  even though neither module imports the other.
+
+### Termination is structural, not conditional prose
+
+`route_after_gate` sends anything other than a clean pass to `END`. A gated run
+therefore cannot reach synthesis, so **an unreviewed figure has no path to a
+customer-facing narrative**. The edge is invisible in the drawn topology —
+LangGraph omits conditional edges targeting `END` — so the test asserts it
+through the routing function, which is the authority.
+
+### The documented limitation, asserted
+
+`test_production_cannot_currently_reach_a_pass` pins the honest state of the
+system: with one scored occupation there is no percentile of our own, so
+calibration returns `review_required`, the gate cannot upgrade it, and no
+report is produced. Scoring several occupations is what unblocks this — not a
+change to the gate. The test exists so that limitation cannot drift out of the
+documentation unnoticed.
+
 ## Known data limitations
 
 These constrain what the prototype may claim, and are repeated in the report:

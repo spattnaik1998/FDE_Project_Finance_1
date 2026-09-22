@@ -16,7 +16,13 @@ from enum import Enum
 from typing import Any
 
 from providers.accounting import Ledger
-from scoring.schemas import RoleVerdict, TaskClassification, TaskScore
+from scoring.schemas import (
+    LagInterval,
+    RoleVerdict,
+    TaskClassification,
+    TaskScore,
+    WeightingBound,
+)
 from tools.audit_adapter import AuditAdapter
 from tools.consumption import ConsumptionTracker
 from tools.evidence import EvidenceTools
@@ -102,7 +108,21 @@ class RunState:
     scope: Scope | None = None
     evidence: Evidence = field(default_factory=Evidence)
     classifications: list[TaskClassification] = field(default_factory=list)
+
+    # The two scoring paths write to SEPARATE fields, which is what lets the
+    # graph fan out in parallel and what makes the independence checkable in
+    # the topology rather than only in the module imports. Nothing on the
+    # exposure side ever writes `lag`, and nothing on the lag side ever writes
+    # `scores` or either weighting bound.
     scores: list[TaskScore] = field(default_factory=list)
+    primary_weighting: WeightingBound | None = None
+    sensitivity_weighting: WeightingBound | None = None
+    lag: LagInterval | None = None
+    # Owned by the lag branch alone. It cannot append to `unresolved` because
+    # the classifier branch runs concurrently and would contend for that key;
+    # assembly folds these in afterwards.
+    lag_notes: list[str] = field(default_factory=list)
+
     verdict: RoleVerdict | None = None
     gate: GateDecision | None = None
     narrative: str | None = None
@@ -147,6 +167,12 @@ class NodeDeps:
     ledger: Ledger = field(default_factory=Ledger)
     provider_for: Any = None          # Callable[[Stage], ModelProvider]
     prompt_version: str = "v1"
+
+    # Our own percentile within a distribution of our scores. None in
+    # production and by default: a percentile is a rank, and a
+    # single-occupation run has no rank. Injectable only so the pass path --
+    # which production therefore cannot currently reach -- stays testable.
+    our_percentile: float | None = None
 
     def provider(self, stage):
         """Resolve the provider for a stage, defaulting to the real registry."""

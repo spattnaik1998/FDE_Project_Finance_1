@@ -644,3 +644,71 @@ iteration in W6, not a defect.
 
 Next: W6, LangGraph assembly. LangGraph is installed; the nodes are already
 graph-shaped.
+
+---
+
+## W6 complete — graph assembly (2026-09-21)
+
+511 tests pass, 29 skip with stated reasons; three consecutive full-suite runs plus a forced-order run, all clean. Branch `feat/p6-graph-assembly`.
+
+LangGraph now owns control flow. The architecture's central claim is no longer
+a paragraph in the TDD — it is the shape of the graph:
+
+```
+intent_scope -> evidence_retrieval -> { exposure_path | lag_path } ->
+assemble_verdict -> review_gate -> synthesis
+```
+
+`build.edges()`, `reaches()` and `concurrent_write_conflicts()` read the
+**compiled** graph, so the topology tests assert what was built rather than
+what was drawn.
+
+**Independence is now enforced at a fourth level.** Behavioural, interface and
+`ast`-structural were already in place; the graph adds reachability (no path
+from either scoring branch to the other, in either direction) and declared
+field ownership (`NODE_WRITES`, with the intersection of the two branches'
+write sets asserted empty).
+
+**Termination is structural.** `route_after_gate` routes anything but a clean
+pass to `END`, so an unreviewed figure has no path to a narrative. LangGraph
+omits conditional edges targeting `END` from its drawable graph, so that branch
+is asserted through the routing function, not the edge list — a test that
+looked at the edges would have passed vacuously.
+
+Five bugs found during the build, four of them real:
+
+1. **Field-ownership write race.** A node returning a whole `RunState` is an
+   update to *every* field, so the classifier wrote `lag=None` in the same
+   superstep as the lag branch wrote the real interval. `NODE_WRITES` now
+   declares what each node owns and the wrapper returns only those keys.
+2. **Asymmetric fan-in fires the join twice.** Probed and confirmed: with a
+   two-hop and a one-hop branch, LangGraph 0.3.34 runs the join once per
+   incoming edge rather than waiting. `add_node(defer=True)` would fix it but
+   is not in this version, so classification and scoring were merged into one
+   `exposure_path` node. The classifier is still its own tested module; it is
+   simply not its own graph node.
+3. **Gate/calibration status precedence.** `close_run` derived the persisted
+   status from calibration, so a `gate_rejected` run would have been stored as
+   `passed` — the audit record would have contradicted the gate. `close_run`
+   now takes `gate_outcome` and it wins.
+4. **`AgentAuditLog.status` was `NVARCHAR(16)`** and truncated on the longer
+   outcomes. Widened to 32 by idempotent ALTER.
+5. My own two test expectations about the pass path were wrong, which is how
+   finding (6) below surfaced.
+
+**Test isolation bug in my own suite, worth recording.** Two guardrail tests
+asserted an *absolute* `COUNT(*)` on `audit.AgentAuditLog`. The audit adapter
+writes under autocommit — correctly, because an append-only log that a
+rollback can erase is not append-only — so the graph fixtures' entries survive
+into later tests. The suite passed in isolation and failed in order. Both now
+assert a delta, or scope to their own marker. A suite that is green only in one
+order is not green.
+
+**The limitation is now a test.** `test_production_cannot_currently_reach_a_pass`
+pins it: one scored occupation has no percentile of its own, so calibration
+returns `review_required`, the gate cannot upgrade it, and the graph produces
+no report. Scoring several occupations unblocks it; changing the gate would
+only hide it. `NodeDeps.our_percentile` exists solely so the pass path stays
+testable, and is `None` in production.
+
+Next: W7, the customer-facing report and provenance appendix.

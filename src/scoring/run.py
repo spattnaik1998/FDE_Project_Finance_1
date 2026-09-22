@@ -260,22 +260,42 @@ def bind_sources(cursor: pyodbc.Cursor, context: RunContext,
 
 
 def close_run(cursor: pyodbc.Cursor, context: RunContext,
-              verdict: RoleVerdict) -> str:
-    """Set the terminal status from the calibration outcome.
+              verdict: RoleVerdict, gate_outcome: str | None = None) -> str:
+    """Set the terminal status, preferring the gate's decision.
 
-    A run whose calibration did not pass does not get status ``passed``, so a
-    downstream report generator cannot mistake it for a clean result.
+    ``gate_outcome`` is authoritative when the Review Gate ran, because the
+    gate -- not the calibration arithmetic -- decides whether a run is fit to
+    report. It may be *stricter* than the calibration: a run whose numbers
+    calibrate cleanly can still be rejected on evidence grounds.
+
+    Without a gate outcome the status falls back to the calibration result,
+    which is the W2 behaviour for a run scored without orchestration. This
+    parameter was added after a test caught a gate-rejected run being persisted
+    as ``passed``.
     """
-    status = {
+    from_calibration = {
         CalibrationOutcome.PASS: "passed",
         CalibrationOutcome.REVIEW_REQUIRED: "review_required",
         CalibrationOutcome.GATE_REJECTED: "gate_rejected",
     }[verdict.calibration.outcome]
 
+    status = gate_outcome_to_status(gate_outcome) or from_calibration
+
     cursor.execute("""UPDATE score.run
                       SET finished_at = SYSUTCDATETIME(), status = ?
                       WHERE run_id = ?""", status, context.run_id)
-    LOG.info("run=%s status=%s exposure_index=%.3f lag=%.1f-%.1f-%.1f",
-             context.run_id, status, verdict.exposure_index,
-             verdict.lag.p10, verdict.lag.p50, verdict.lag.p90)
+    LOG.info("run=%s status=%s source=%s exposure_index=%.3f lag=%.1f-%.1f-%.1f",
+             context.run_id, status,
+             "gate" if gate_outcome else "calibration",
+             verdict.exposure_index, verdict.lag.p10, verdict.lag.p50,
+             verdict.lag.p90)
     return status
+
+
+def gate_outcome_to_status(gate_outcome: str | None) -> str | None:
+    """Map a gate decision to a persisted run status, or None if absent."""
+    return {
+        "pass": "passed",
+        "review_required": "review_required",
+        "gate_rejected": "gate_rejected",
+    }.get(gate_outcome or "")
