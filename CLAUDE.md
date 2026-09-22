@@ -576,3 +576,71 @@ into.
 The machine variable is now harmless but still misleading. Optional cleanup,
 elevated: `[Environment]::SetEnvironmentVariable('OPENAI_API_KEY', $null, 'Machine')`.
 Nothing depends on it.
+
+---
+
+## W5 complete — orchestration nodes (2026-09-21)
+
+497 tests (466 without credentials), 29 skipped. Branch
+`feat/p5-orchestration-nodes`.
+
+Four model nodes plus deterministic retrieval, each a plain function over
+`RunState` so it is testable alone. Graph assembly is W6.
+
+**The comparison the plan demanded — same 26 tasks, baseline vs model:**
+
+| | Baseline | Model |
+|---|---|---|
+| Exposure index | 0.541 | 0.384 |
+| Direction resolved | 0/26 | **14/26** |
+| …as substitute | 0 | **0** |
+| Low confidence | 26/26 | **0** |
+| Cited evidence | 0 | **14** |
+
+**The model earns its cost**, on the field that matters: the baseline cannot
+tell augmentation from substitution and says so on every task; the model
+resolves it on 54% and cites evidence doing so. It returned **zero**
+`substitute` judgments — independently landing on the augmentation reading the
+survey prior supports. The lower index is a *consequence* (higher tacitness
+than keyword matching, the direction Polanyi predicts), not proof of accuracy,
+and the README says so rather than claiming 0.384 is "righter" than 0.541.
+
+Cost: 28 calls, 30,047 tokens, 3.4 min.
+
+**Independence demonstrated live:** `baseline lag identical: True`. Swapping
+the entire classification layer left the lag interval byte-identical.
+
+**The gate reasoned correctly on its own:** emitted `review_required` naming
+*"an unidentifiable comparison, not a numeric disagreement"* — exactly the
+distinction the three-state design exists for. No narrative produced, as
+`review_required` should not yield a report.
+
+Refusals built into the nodes, each with a test:
+- Intent halts on an unpublished occupation and **verifies the model's SOC
+  against the catalogue** rather than trusting the schema, which only
+  constrains the type. A confident answer about a different role is the worst
+  failure this system could have.
+- Classifier drops invented citations and records them; a schema violation
+  degrades one task, not the run; the fallback is *non-routine* so a failure
+  cannot inflate exposure.
+- Gate computes structural checks in Python **before** consulting the model, so
+  a hard failure never depends on a model noticing it. It cannot upgrade a
+  rejected calibration, and an unavailable gate rejects rather than waving the
+  run through.
+- Synthesis gets one retry with the offending figure named, then produces **no
+  narrative at all**. A fluent report with one invented number is worse than no
+  report.
+
+`nodes/figure_guard.py` is the mechanism behind "no unsourced figures":
+allow-set from verdict + scores + evidence, every number in the draft checked
+against it. Calibrated both ways — catches invented percentages, years and
+headcounts; does not fire on "three caveats", on 0.54 rounded from 0.541, or on
+a share quoted as a percentage.
+
+One honest observation: the classifier cited evidence on 14 of 26 tasks, not
+all 26. Verified the evidence *does* reach the prompt (9 claims, correctly
+formatted), so the model is choosing not to cite on some tasks. Worth a prompt
+iteration in W6, not a defect.
+
+Next: W6, LangGraph assembly. LangGraph is installed; the nodes are already
+graph-shaped.
