@@ -332,11 +332,25 @@ BEGIN
         input_tokens     INT           NULL,
         output_tokens    INT           NULL,
         duration_ms      INT           NULL,
-        status           NVARCHAR(16)  NULL,
+        status           NVARCHAR(32)  NULL,
         CONSTRAINT PK_AgentAuditLog PRIMARY KEY (entry_id)
     );
     CREATE INDEX IX_audit_run ON audit.AgentAuditLog (run_id, [timestamp]);
     PRINT 'Created audit.AgentAuditLog';
+END
+GO
+
+/* status was NVARCHAR(16), which a descriptive value such as
+   'rejected_unsourced_figure' overflows. SQL Server raised rather than
+   truncating -- the right behaviour -- but the column was simply too narrow
+   for the vocabulary the orchestration nodes need. Widened idempotently so an
+   existing database is migrated rather than rebuilt. */
+IF EXISTS (SELECT 1 FROM sys.columns
+           WHERE object_id = OBJECT_ID('audit.AgentAuditLog')
+             AND name = 'status' AND max_length < 64)
+BEGIN
+    ALTER TABLE audit.AgentAuditLog ALTER COLUMN status NVARCHAR(32) NULL;
+    PRINT 'Widened audit.AgentAuditLog.status to NVARCHAR(32)';
 END
 GO
 

@@ -142,9 +142,17 @@ def test_gate_rejected_needs_no_explanation(cur, run_id):
 # --- The audit log is append-only in fact -----------------------------------
 
 def test_audit_log_accepts_inserts(cur):
+    """Asserts a delta, not an absolute count.
+
+    The log is append-only and written under autocommit, so entries from other
+    tests in the session survive a rollback. An absolute count would make this
+    test order-dependent.
+    """
+    before = cur.execute("SELECT COUNT(*) FROM audit.AgentAuditLog").fetchone()[0]
     cur.execute("""INSERT INTO audit.AgentAuditLog (node_invoked, tool_invoked, status)
                    VALUES ('3A. Task Classifier', 'VW_ROLE_TASKS', 'ok')""")
-    assert cur.execute("SELECT COUNT(*) FROM audit.AgentAuditLog").fetchone()[0] == 1
+    after = cur.execute("SELECT COUNT(*) FROM audit.AgentAuditLog").fetchone()[0]
+    assert after == before + 1
 
 
 def test_audit_log_update_raises(cur):
@@ -165,11 +173,13 @@ def test_audit_log_delete_raises(cur):
 
 def test_tool_raw_output_is_stored_unmodified(cur):
     """A disputed figure must be attributable to evidence or to reasoning."""
-    raw = '[{"Task_ID":"21579","Source_Doc_ID":"onet_task_statements"}]'
+    raw = '[{"Task_ID":"21579","Source_Doc_ID":"guardrail_probe"}]'
     cur.execute("""INSERT INTO audit.AgentAuditLog (tool_invoked, tool_raw_output)
-                   VALUES ('VW_ROLE_TASKS', ?)""", raw)
-    assert cur.execute(
-        "SELECT tool_raw_output FROM audit.AgentAuditLog").fetchone()[0] == raw
+                   VALUES ('guardrail_probe', ?)""", raw)
+    stored = cur.execute("""SELECT TOP 1 tool_raw_output FROM audit.AgentAuditLog
+                            WHERE tool_invoked = 'guardrail_probe'
+                            ORDER BY entry_id DESC""").fetchone()[0]
+    assert stored == raw
 
 
 # --- Provenance is not optional ---------------------------------------------
