@@ -63,6 +63,11 @@ GRANT INSERT ON audit.quality_assertion TO db_fde_load;
    can be edited afterwards proves nothing, which is the same reason
    ref.source_document is immutable in the first place. */
 GRANT INSERT, SELECT ON audit.source_verification TO db_fde_load;
+/* No application principal writes audit.security_event. It records privilege
+   changes, which only a sysadmin can make, so only a sysadmin can record one.
+   Granting INSERT to an application role would let the application fabricate
+   its own security history. */
+DENY SELECT, INSERT, UPDATE, DELETE ON audit.security_event TO db_fde_load;
 DENY UPDATE, DELETE ON audit.source_verification TO db_fde_load;
 DENY SELECT, INSERT, UPDATE, DELETE ON audit.AgentAuditLog TO db_fde_load;
 GO
@@ -88,6 +93,7 @@ GRANT INSERT, SELECT ON audit.quality_assertion  TO db_fde_score;
    blocks customer delivery. Read only: it must not be able to clear its own
    blocker. */
 GRANT SELECT ON audit.source_verification TO db_fde_score;
+DENY SELECT, INSERT, UPDATE, DELETE ON audit.security_event TO db_fde_score;
 DENY INSERT, UPDATE, DELETE ON audit.source_verification TO db_fde_score;
 DENY UPDATE, DELETE ON audit.run_source_binding  TO db_fde_score;
 DENY SELECT, UPDATE, DELETE ON audit.AgentAuditLog TO db_fde_score;
@@ -108,6 +114,7 @@ DENY SELECT, INSERT, UPDATE, DELETE ON SCHEMA::score TO db_fde_audit;
 DENY SELECT ON audit.run_source_binding TO db_fde_audit;
 DENY SELECT ON audit.quality_assertion  TO db_fde_audit;
 DENY SELECT, INSERT, UPDATE, DELETE ON audit.source_verification TO db_fde_audit;
+DENY SELECT, INSERT, UPDATE, DELETE ON audit.security_event TO db_fde_audit;
 GO
 
 PRINT 'Permissions applied to all four roles';

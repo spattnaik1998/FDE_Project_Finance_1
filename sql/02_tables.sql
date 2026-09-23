@@ -450,6 +450,49 @@ BEGIN
 END
 GO
 
+/* Security-relevant changes to the instance or the principal set.
+
+   Everything else in this warehouse is logged -- which evidence a run
+   consumed, what a model decided, whether a mirror was checked -- but the
+   change that matters most to a reviewer had no record at all: enabling
+   mixed-mode authentication and creating four logins. In a regulated setting
+   "when was SQL auth turned on, by whom, and what did it grant" is an audit
+   question, and the answer was previously a shrug plus whatever the operator
+   remembered.
+
+   Append-only for the same reason as the rest: a security log that the holder
+   of the privilege can edit is not a log. Deliberately holds no secret --
+   event, actor, before/after state and detail only. A password or a
+   connection string in an audit table is a new exposure, not a control. */
+IF OBJECT_ID('audit.security_event') IS NULL
+BEGIN
+    CREATE TABLE audit.security_event (
+        event_id      BIGINT IDENTITY(1,1) NOT NULL,
+        occurred_at   DATETIME2     NOT NULL CONSTRAINT DF_secev_at DEFAULT SYSUTCDATETIME(),
+        event_type    NVARCHAR(48)  NOT NULL,
+        actor         NVARCHAR(128) NOT NULL,
+        state_before  NVARCHAR(256) NULL,
+        state_after   NVARCHAR(256) NULL,
+        detail        NVARCHAR(MAX) NULL,
+        CONSTRAINT PK_security_event PRIMARY KEY (event_id),
+        CONSTRAINT CK_secev_type CHECK (event_type IN
+            ('auth_mode_changed','logins_created','logins_dropped',
+             'role_membership_changed','secret_acl_restricted')),
+        /* An actor is not optional. An unattributed security event is not an
+           audit record.                                                     */
+        CONSTRAINT CK_secev_actor CHECK (LEN(LTRIM(RTRIM(actor))) > 0),
+        /* Cheap guard against a secret being pasted into the detail column.  */
+        CONSTRAINT CK_secev_nosecret CHECK (
+            detail IS NULL OR (
+                detail NOT LIKE '%PASSWORD =%' AND
+                detail NOT LIKE '%PASSWORD=%'  AND
+                detail NOT LIKE '%sk-%'))
+    );
+    CREATE INDEX IX_secev_time ON audit.security_event (occurred_at DESC);
+    PRINT 'Created audit.security_event';
+END
+GO
+
 /* A verification EVENT, not a correction to the artefact.
 
    ref.source_document is deliberately immutable -- db_fde_load holds

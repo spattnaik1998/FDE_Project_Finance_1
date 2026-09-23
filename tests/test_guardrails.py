@@ -217,3 +217,65 @@ def test_occupation_changes_are_versioned_not_lost(cur, soc):
     history = cur.execute(
         "SELECT COUNT(*) FROM ref.occupation_history WHERE soc_code = ?", soc).fetchone()[0]
     assert history >= 1, "the prior title must survive in the history table"
+
+
+# --- The security log is evidence, so it must resist its own operator --------
+
+def test_a_security_event_requires_an_actor(cur):
+    """An unattributed privilege change is not an audit record."""
+    with pytest.raises(Exception):
+        cur.execute("""INSERT INTO audit.security_event
+                           (event_type, actor, state_after)
+                       VALUES ('auth_mode_changed', '   ', 'mixed_mode')""")
+
+
+def test_an_unrecognised_security_event_type_is_refused(cur):
+    with pytest.raises(Exception):
+        cur.execute("""INSERT INTO audit.security_event
+                           (event_type, actor, state_after)
+                       VALUES ('did_some_stuff', 'someone', 'x')""")
+
+
+@pytest.mark.parametrize("leaked", [
+    "USR_FDE_RO_PASSWORD = 'hunter2'",
+    "USR_FDE_RO_PASSWORD='hunter2'",
+    "key is sk-abcdefghijklmnop",
+])
+def test_a_secret_cannot_be_pasted_into_the_security_log(cur, leaked):
+    """A password in an audit table is a new exposure, not a control.
+
+    The CHECK is a cheap guard, not a scrubber -- it catches the shapes an
+    operator actually pastes by accident, which is the realistic failure.
+    """
+    with pytest.raises(Exception):
+        cur.execute("""INSERT INTO audit.security_event
+                           (event_type, actor, state_after, detail)
+                       VALUES ('logins_created', 'someone', 'x', ?)""", leaked)
+
+
+def test_a_clean_security_event_is_accepted(cur):
+    """Guards that reject everything are indistinguishable from a broken table."""
+    before = cur.execute("SELECT COUNT(*) FROM audit.security_event").fetchone()[0]
+    cur.execute("""INSERT INTO audit.security_event
+                       (event_type, actor, state_before, state_after, detail)
+                   VALUES ('auth_mode_changed', 'DOMAIN\someone',
+                           'windows_only', 'mixed_mode',
+                           'LoginMode set to 2 and the instance restarted.')""")
+    after = cur.execute("SELECT COUNT(*) FROM audit.security_event").fetchone()[0]
+    assert after == before + 1
+
+
+def test_no_application_principal_can_write_the_security_log():
+    """Only a sysadmin makes a privilege change, so only a sysadmin records one.
+
+    Asserted against the DENY grants in sql/04 rather than at runtime, because
+    the logins do not exist until mixed-mode auth is enabled. Becomes a live
+    privilege test at that point.
+    """
+    from pathlib import Path
+
+    grants = Path("sql/04_roles_and_permissions.sql").read_text(encoding="utf-8")
+    for role in ("db_fde_load", "db_fde_score", "db_fde_audit"):
+        assert f"DENY SELECT, INSERT, UPDATE, DELETE ON audit.security_event TO {role};" in grants, (
+            f"{role} is not denied on audit.security_event; an application "
+            f"principal that can write its own security history is not audited")

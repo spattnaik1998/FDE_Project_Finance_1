@@ -22,7 +22,11 @@
 .NOTES
     Run from an ELEVATED PowerShell, from the project root:
 
-        powershell -ExecutionPolicy Bypass -File scripts\enable_sql_auth.ps1
+        powershell -File scripts\enable_sql_auth.ps1
+
+    No -ExecutionPolicy Bypass: CurrentUser is already RemoteSigned, which
+    permits a local unsigned script, and this file carries no mark-of-the-web.
+    Bypass would weaken the policy for the whole process to buy nothing.
 
     To reverse: set LoginMode back to 1, restart the service, and
     DROP LOGIN each USR_FDE_* principal.
@@ -92,6 +96,21 @@ if ($SkipRestart) {
 $envPath = Join-Path (Split-Path $PSScriptRoot -Parent) '.env'
 if (-not (Test-Path $envPath)) { throw "No .env found at $envPath" }
 
+# Refuse to write database passwords into a file every local account can read.
+# .env inherits BUILTIN\Users FullControl from the enclosing folder by default,
+# which would turn "API keys that can be rotated" into "database credentials
+# readable by anyone with a login on this box".
+$broad = (Get-Acl $envPath).Access | Where-Object {
+    $_.IdentityReference -match 'Users|Everyone|Authenticated Users' -and
+    $_.AccessControlType -eq 'Allow'
+}
+if ($broad) {
+    throw ("$envPath is readable by $($broad.IdentityReference -join ', '). " +
+           "Run scripts\harden_secrets.ps1 first; this script will not write " +
+           "database passwords into a world-readable file.")
+}
+Write-Host '.env ACL: restricted (no broad Allow entry)' -ForegroundColor Green
+
 $existing = Get-Content $envPath -Raw
 $principals = @('USR_FDE_RO', 'USR_FDE_LOAD', 'USR_FDE_SCORE', 'USR_FDE_AUDIT')
 $passwords = @{}
@@ -112,13 +131,29 @@ foreach ($p in $principals) {
 $sqlPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'sql\06_logins_and_users.sql'
 Write-Host "Applying $sqlPath ..."
 
-sqlcmd -S $ServerName -E -b -i $sqlPath `
-    -v RO_PASSWORD="$($passwords['USR_FDE_RO'])" `
-       LOAD_PASSWORD="$($passwords['USR_FDE_LOAD'])" `
-       SCORE_PASSWORD="$($passwords['USR_FDE_SCORE'])" `
-       AUDIT_PASSWORD="$($passwords['USR_FDE_AUDIT'])"
+# Passwords go in as ENVIRONMENT VARIABLES, not as -v arguments.
+#
+# sqlcmd resolves $(VAR) from the environment as well as from -v, and a command
+# line is not a secret: on Windows any process able to enumerate processes can
+# read another's full command line. Passing four database passwords as -v
+# arguments would publish them to every process running as this user -- and this
+# script runs elevated. The window is short but the exposure is avoidable.
+#
+# Scoped to this process and cleared in the finally block, so they do not leak
+# into anything this shell launches afterwards.
+try {
+    $env:RO_PASSWORD    = $passwords['USR_FDE_RO']
+    $env:LOAD_PASSWORD  = $passwords['USR_FDE_LOAD']
+    $env:SCORE_PASSWORD = $passwords['USR_FDE_SCORE']
+    $env:AUDIT_PASSWORD = $passwords['USR_FDE_AUDIT']
 
-if ($LASTEXITCODE -ne 0) { throw "sqlcmd failed with exit code $LASTEXITCODE" }
+    sqlcmd -S $ServerName -E -b -i $sqlPath
+
+    if ($LASTEXITCODE -ne 0) { throw "sqlcmd failed with exit code $LASTEXITCODE" }
+} finally {
+    Remove-Item Env:RO_PASSWORD, Env:LOAD_PASSWORD, Env:SCORE_PASSWORD, `
+                Env:AUDIT_PASSWORD -ErrorAction SilentlyContinue
+}
 
 # --- 6. Verify --------------------------------------------------------------
 Write-Host ''
@@ -135,6 +170,35 @@ JOIN sys.database_principals r ON r.principal_id = m.role_principal_id
 JOIN sys.database_principals dp ON dp.principal_id = m.member_principal_id
 WHERE dp.name LIKE 'USR_FDE%' ORDER BY dp.name;
 "@
+
+# --- 7. Record the change ---------------------------------------------------
+# Every other kind of evidence in this warehouse is logged. A privilege change
+# should not be the exception, and "the operator remembers doing it" is not an
+# audit trail. No secret goes into this record: event, actor, before/after only.
+Write-Host ''
+Write-Host 'Recording the change in audit.security_event ...' -ForegroundColor Cyan
+$actor = "$env:USERDOMAIN\$env:USERNAME"
+$env:SEC_ACTOR = $actor
+try {
+    sqlcmd -S $ServerName -E -b -d $Database -Q @"
+SET NOCOUNT ON;
+INSERT INTO audit.security_event
+    (event_type, actor, state_before, state_after, detail)
+VALUES ('auth_mode_changed', '`$(SEC_ACTOR)', 'windows_only', 'mixed_mode',
+        'LoginMode set to 2 and the instance restarted by scripts/enable_sql_auth.ps1.');
+INSERT INTO audit.security_event
+    (event_type, actor, state_before, state_after, detail)
+VALUES ('logins_created', '`$(SEC_ACTOR)', 'no USR_FDE logins',
+        'USR_FDE_RO, USR_FDE_LOAD, USR_FDE_SCORE, USR_FDE_AUDIT',
+        'Created with CHECK_POLICY=ON, no server roles, and membership only in the db_fde_* database roles that already carry the grants.');
+SELECT event_id, event_type, actor FROM audit.security_event ORDER BY event_id DESC;
+"@
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning 'Could not write the security_event record. The privilege change itself succeeded; record it manually.'
+    }
+} finally {
+    Remove-Item Env:SEC_ACTOR -ErrorAction SilentlyContinue
+}
 
 Write-Host ''
 Write-Host 'Done. Next, from the project root (non-elevated is fine):' -ForegroundColor Green
