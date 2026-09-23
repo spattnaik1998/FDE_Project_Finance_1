@@ -13,6 +13,7 @@ import logging
 
 import pandas as pd
 
+import config
 from http_client import post_json
 
 LOG = logging.getLogger("fetch.bls")
@@ -30,7 +31,11 @@ def key_is_valid(api_key: str) -> bool:
     result = post_json(V2, source="bls.keycheck", payload=body)
     ok = result.get("status") == "REQUEST_SUCCEEDED"
     if not ok:
-        LOG.warning("source=bls status=key_rejected messages=%s", result.get("message"))
+        # BLS echoes the submitted key back inside this message, so it is
+        # redacted before it reaches a log. Without this, the first use of a
+        # freshly rotated key prints it to the console.
+        LOG.warning("source=bls status=key_rejected messages=%s",
+                    config.redact(result.get("message")))
     return ok
 
 
@@ -58,7 +63,11 @@ def fetch_series(series_ids: list[str], start_year: int, end_year: int,
 
         result = post_json(url, source="bls", payload=payload)
         if result.get("status") != "REQUEST_SUCCEEDED":
-            raise RuntimeError(f"BLS rejected request: {result.get('message')}")
+            # Redacted here too: an exception message ends up in a traceback,
+            # which is if anything more likely to be pasted somewhere than a
+            # log line is.
+            raise RuntimeError(
+                f"BLS rejected request: {config.redact(result.get('message'))}")
 
         for series in result.get("Results", {}).get("series", []):
             sid = series.get("seriesID")

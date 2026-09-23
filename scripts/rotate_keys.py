@@ -221,7 +221,7 @@ def main() -> int:
     print(f"{'-' * 74}")
     keys = config.load_keys(include_models=True)
     sources = config.key_sources(include_models=True)
-    failures = 0
+    failures = warnings = 0
     for name in targets:
         key = keys.get(name)
         if not key:
@@ -229,15 +229,25 @@ def main() -> int:
             failures += 1
             continue
         ok, detail = probe(name, key)
-        status = "OK  " if ok else "FAIL"
-        if not ok and name == "BLS_API_KEY":
-            status = "WARN"          # documented fallback, not a blocker
+        if ok:
+            status = "OK  "
+        elif name == "BLS_API_KEY":
+            # Documented condition with a working keyless-v1 fallback, so not a
+            # blocker -- but counted separately. Folding it into the OK total
+            # printed "6/6 usable" directly beneath a visible WARN, which
+            # teaches the reader to stop believing the total.
+            status, warnings = "WARN", warnings + 1
         else:
-            failures += 0 if ok else 1
+            status, failures = "FAIL", failures + 1
         print(f"  {status}  {name:20} {detail}   [{sources.get(name, '?')}]")
 
-    print(f"\n  {len(targets) - failures}/{len(targets)} usable"
-          + (f", {failures} need attention" if failures else ""))
+    healthy = len(targets) - failures - warnings
+    summary = f"\n  {healthy}/{len(targets)} fully working"
+    if warnings:
+        summary += f", {warnings} degraded but usable"
+    if failures:
+        summary += f", {failures} need attention"
+    print(summary)
     print("\n  Nothing here is printed with a key in it. If you pasted a wrong")
     print("  value, re-run for that one key with --only <NAME>.")
     return 1 if failures else 0

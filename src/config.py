@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 
 LOG = logging.getLogger("config")
@@ -201,3 +202,60 @@ MODEL_REVIEW_GATE = os.environ.get("MODEL_REVIEW_GATE", "claude-opus-5")
 
 # Valid for gpt-6-astra: low | medium | high | xhigh. Default is medium.
 REASONING_EFFORT = os.environ.get("REASONING_EFFORT", "medium")
+
+
+# ---------------------------------------------------------------------------
+# Redaction
+# ---------------------------------------------------------------------------
+#
+# At least one provider echoes the submitted credential back inside its own
+# error message. BLS does:
+#
+#     "The key:<the key you just sent> provided by the User is invalid"
+#
+# and the adapter logged that message verbatim, so a freshly rotated key was
+# printed to the console the first time it was used. Found the hard way, during
+# a rotation.
+#
+# The defence is keyed on the *actual* configured values rather than on shape
+# alone: a heuristic that only matches "looks like a key" will miss a
+# credential whose format it does not know, and every provider invents its own.
+# Shape patterns are kept as a second line for values not in our own config
+# (someone else's key quoted back at us, a token in a payload).
+
+_SHAPE_PATTERNS = (
+    re.compile(r"sk-[A-Za-z0-9_\-]{12,}"),          # OpenAI-style
+    re.compile(r"sk-ant-[A-Za-z0-9_\-]{12,}"),      # Anthropic-style
+    re.compile(r"\b[0-9a-f]{32}\b"),                # BLS/Census-style hex
+    re.compile(r"\b[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-"
+               r"[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\b"),  # GUID-style (BEA)
+)
+
+MASK = "<redacted>"
+
+
+def redact(text: object) -> str:
+    """Mask any configured credential, or credential-shaped token, in ``text``.
+
+    Use this on anything that originated with a provider before logging it or
+    putting it in an exception. A provider's error text is not ours and may
+    contain whatever the provider chose to include -- including what we sent.
+
+    Redacts the longest values first, so a key that contains another shorter
+    value cannot be partially unmasked.
+    """
+    rendered = str(text)
+    if not rendered:
+        return rendered
+
+    try:
+        known = [v for v in load_keys(include_models=True).values() if v]
+    except Exception:                               # noqa: BLE001 - never block
+        known = []
+    for value in sorted(known, key=len, reverse=True):
+        if len(value) >= 8:                         # avoid masking trivia
+            rendered = rendered.replace(value, MASK)
+
+    for pattern in _SHAPE_PATTERNS:
+        rendered = pattern.sub(MASK, rendered)
+    return rendered

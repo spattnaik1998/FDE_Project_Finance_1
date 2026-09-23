@@ -176,3 +176,86 @@ def test_parser_tolerates_crlf_and_no_trailing_newline(tmp_path):
 def test_parser_raises_on_a_missing_file(tmp_path):
     with pytest.raises(config.ConfigError, match="No .env file"):
         config._parse_env_file(tmp_path / "absent")
+
+
+# ===========================================================================
+# Redaction: a provider's error text is not ours
+# ===========================================================================
+
+def test_the_real_bls_leak_is_redacted():
+    """BLS echoes the submitted key back inside its own error message.
+
+    The adapter logged that verbatim, so the first use of a freshly rotated key
+    printed it to the console. Found during an actual rotation, which is the
+    worst moment to discover it.
+    """
+    key = "1813f3f767f64aa084e5356521050daf"
+    message = f"The key:{key} provided by the User is invalid"
+
+    out = config.redact(message)
+
+    assert key not in out
+    assert config.MASK in out
+    assert "provided by the User is invalid" in out, (
+        "the diagnostic text must survive; redaction that destroys the message "
+        "trades one debugging problem for another")
+
+
+def test_a_configured_key_is_redacted_even_with_an_unknown_shape(monkeypatch):
+    """Shape heuristics miss formats they do not know; known values do not."""
+    weird = "totally-unlike-any-known-key-format-12345"
+    monkeypatch.setattr(config, "load_keys",
+                        lambda include_models=False: {"X_API_KEY": weird})
+
+    assert weird not in config.redact(f"rejected value {weird} sorry")
+
+
+@pytest.mark.parametrize("token", [
+    "sk-abcdefghijklmnopqrstuvwx",
+    "sk-ant-abcdefghijklmnopqrst",
+    "1813f3f767f64aa084e5356521050daf",
+    "A1B2C3D4-E5F6-7890-ABCD-EF1234567890",
+])
+def test_credential_shapes_are_redacted(token):
+    """Second line of defence, for values that are not in our own config."""
+    assert token not in config.redact(f"payload contained {token} at the end")
+
+
+def test_ordinary_text_is_left_alone():
+    """A redactor that mangles normal logs gets switched off."""
+    for benign in ("396 rows returned in 1.2s",
+                   "exposure index 0.384, lag 5.0/10.07/30.0",
+                   "run FB87DB0F-2F84-405D-8033-9FE3E4162FFE finished"):
+        out = config.redact(benign)
+        if "FB87DB0F" in benign:
+            # A run id is GUID-shaped and will be masked. That is the cost of
+            # the shape rule, and it is the right trade: masking an identifier
+            # is recoverable, printing a credential is not.
+            assert config.MASK in out
+        else:
+            assert out == benign
+
+
+def test_the_longest_value_is_redacted_first(monkeypatch):
+    """A short key contained inside a longer one must not partially unmask it."""
+    monkeypatch.setattr(config, "load_keys",
+                        lambda include_models=False: {
+                            "SHORT": "abcd1234", "LONG": "abcd1234efgh5678"})
+
+    out = config.redact("value abcd1234efgh5678 here")
+
+    assert "abcd1234efgh5678" not in out
+    assert out.count(config.MASK) == 1, (
+        "the long value should be masked once, not left as a masked prefix "
+        "followed by a readable remainder")
+
+
+def test_redaction_never_raises_when_keys_are_unreadable(monkeypatch):
+    """Redaction sits in a logging path and must not become the failure."""
+    def boom(include_models=False):
+        raise OSError("cannot read .env")
+    monkeypatch.setattr(config, "load_keys", boom)
+
+    out = config.redact("token sk-abcdefghijklmnopqrs here")
+    assert "sk-abcdefghijklmnopqrs" not in out, (
+        "shape patterns must still apply when the key file is unreadable")
