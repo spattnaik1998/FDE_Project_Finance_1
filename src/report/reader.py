@@ -39,11 +39,23 @@ class SourceRecord:
     is_mirror: bool
     verified_against_publisher: bool
     usage_types: tuple[str, ...] = ()
+    # A passing entry in audit.source_verification: the publisher's own copy
+    # was re-fetched and its SHA-256 matched this artefact's digest.
+    verified_by_digest: bool = False
 
     @property
     def needs_spot_check(self) -> bool:
-        """A mirror nobody checked against the publisher."""
-        return self.is_mirror and not self.verified_against_publisher
+        """A mirror that nothing has checked against the publisher.
+
+        Either route clears it: the flag on the document, or a recorded
+        digest match against the publisher's own distribution. The second is
+        the stronger claim -- identical bytes rather than a sample of values
+        that looked right -- and it is the one the verification script
+        produces.
+        """
+        return (self.is_mirror
+                and not self.verified_against_publisher
+                and not self.verified_by_digest)
 
 
 @dataclass
@@ -202,9 +214,16 @@ def load_run(run_id: str, *, database: str | None = None) -> ReportData:
         source_rows = cursor.execute("""
             SELECT d.doc_id, d.title, d.publisher, d.url, d.format, d.sha256,
                    d.retrieved_at, d.is_mirror, d.verified_against_publisher,
-                   STRING_AGG(b.usage_type, ',')
+                   STRING_AGG(b.usage_type, ','),
+                   -- A digest match against the publisher's own copy clears a
+                   -- mirror. Matched against d.sha256 rather than taken on
+                   -- trust, so a verification recorded against some other
+                   -- digest cannot clear this artefact.
+                   MAX(CASE WHEN v.matched = 1 AND v.publisher_sha256 = d.sha256
+                            THEN 1 ELSE 0 END)
             FROM audit.run_source_binding b
             JOIN ref.source_document d ON d.doc_id = b.source_doc_id
+            LEFT JOIN audit.source_verification v ON v.source_doc_id = d.doc_id
             WHERE b.run_id = ?
             GROUP BY d.doc_id, d.title, d.publisher, d.url, d.format, d.sha256,
                      d.retrieved_at, d.is_mirror, d.verified_against_publisher
@@ -250,7 +269,8 @@ def load_run(run_id: str, *, database: str | None = None) -> ReportData:
                               is_mirror=bool(r[7]),
                               verified_against_publisher=bool(r[8]),
                               usage_types=tuple(sorted(
-                                  u for u in (r[9] or "").split(",") if u)))
+                                  u for u in (r[9] or "").split(",") if u)),
+                              verified_by_digest=bool(r[10]))
                  for r in source_rows],
         claims=[ClaimRecord(claim_id=r[0], topic=r[1], quote=r[2],
                             page=int(r[3]), source_doc_id=r[4])

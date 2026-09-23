@@ -814,6 +814,59 @@ identifiable", never to a percentile over whatever rows happen to be present.
   about that cohort. This one is the finance family: the right frame for the
   customer question, the wrong frame for any claim about the whole economy.
 
+## Mirror verification
+
+```bash
+python scripts/verify_sources.py --dry-run
+python scripts/verify_sources.py
+```
+
+Two of the 29 artefacts were mirrors — the Felten/Raj/Seamans AIOE files, taken
+from a third-party reproducibility repository rather than the authors'. Their
+provenance note required a spot check before customer-facing use, and
+`report.provenance` blocked `customer_deliverable` until one existed.
+
+**Both are now verified, byte-identical to the authors' own distribution** at
+`github.com/AIOE-Data/AIOE` — whose README carries the Felten/Raj/Seamans
+citation and the authors' institutional contacts. That distinction is the
+point: one GitHub URL is not automatically as good as another, and the reason
+to trust this one is authorship, not the hostname.
+
+This is what content addressing was for. A spot check of sampled values would
+show they *look* right; re-fetching the publisher's file and comparing SHA-256
+shows the bytes are **identical**, which is strictly stronger and needs no
+judgement about which values to sample.
+
+### Recorded as an event, not a flag
+
+The result goes to `audit.source_verification`, never back onto
+`ref.source_document`. Two reasons:
+
+- That row is **immutable by design** — `db_fde_load` holds `DENY UPDATE` on
+  it, because a snapshot whose digest can be edited is not a snapshot. Flipping
+  `verified_against_publisher` would require mutating the very row the
+  provenance chain rests on.
+- A verification has a **time, a method, a counterpart URL and an outcome**,
+  and it can be repeated. A publisher revision that breaks a previously passing
+  check has to be able to sit in the record next to the check it invalidates. A
+  boolean cannot hold that.
+
+`db_fde_load` gets `INSERT, SELECT` and is denied `UPDATE`/`DELETE` — a
+verification that can be edited afterwards proves nothing. `db_fde_score` gets
+`SELECT` only, so the reporting side **cannot clear its own blocker**.
+
+### What must not clear a mirror
+
+The reader accepts a verification only when `publisher_sha256` equals the
+artefact's own digest. Tested in both failing directions:
+
+- a recorded **mismatch** does not clear it;
+- a **passing** check recorded against a *different* digest does not clear it
+  either — that verified some other version of the file.
+
+A mismatch is never corrected by the script. It is recorded, and a human has to
+explain the difference before delivery.
+
 ## Stack verification
 
 ```bash

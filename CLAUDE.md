@@ -978,3 +978,54 @@ is a statement about that cohort: this one is the finance family, which is the
 right frame for the customer question and the wrong frame for any claim about
 the whole economy. Both are appended to the run's `unresolved` list and reach
 the report and the UI.
+
+---
+
+## Client-readiness pass (2026-09-22)
+
+You added OpenAI credits and asked for the remaining functionality tested and
+the system prepared for client use.
+
+**The suite is fully green for the first time in two days: 648 passed,
+30 skipped, 0 failed, zero 429s.** The four failures in the previous pass were
+OpenAI quota exhaustion, confirmed precisely at the time — `gpt-6-astra` failed
+every call while `claude-opus-5` answered normally, so it was never a code
+defect. Worth recording that I first blamed my own concurrent cohort batch for
+the 429s; that was wrong, and the probe that separated the two providers is what
+established it.
+
+**The mirror blocker is cleared with evidence rather than a flag.** Two of the
+29 artefacts were mirrors — the Felten AIOE files from a third-party
+reproducibility repo. Both are now confirmed **byte-identical** to the authors'
+own distribution at `github.com/AIOE-Data/AIOE`, whose README carries the
+Felten/Raj/Seamans citation and their institutional contacts. That authorship
+check is the load-bearing part: one GitHub URL is not automatically better than
+another.
+
+This is what content addressing was built for. A spot check of sampled values
+would show they look right; comparing SHA-256 against the publisher's file
+shows the bytes are identical, which is strictly stronger and requires no
+judgement about which values to sample.
+
+`customer_deliverable` is now **True**: 174 figures traced, 0 unregistered,
+0 unbound, 0 unhashed, 0 unverified mirrors.
+
+**Recorded as an event, not a mutation.** `audit.source_verification` holds the
+check — time, method, counterpart URL, outcome — because `ref.source_document`
+is immutable by design (`db_fde_load` holds `DENY UPDATE`; a snapshot whose
+digest can be edited is not a snapshot), and because a verification can be
+repeated. A publisher revision that breaks a previously passing check must be
+able to sit in the record beside the check it invalidates, which a boolean
+cannot express. `db_fde_score` gets `SELECT` only, so **the reporting side
+cannot clear its own blocker**.
+
+Two negative paths are tested, because a verification that cannot fail is
+decoration: a recorded mismatch does not clear the mirror, and a *passing* check
+recorded against a different digest does not either — that verified some other
+version of the file.
+
+**A correction to my earlier readiness summary.** I reported
+`verified_against_publisher = 0` as though it flagged a problem across the
+board. It is the column default on all 29 documents, most of which were fetched
+directly from BEA, Census, O*NET, NBER or arXiv. Only `is_mirror = 1` marked a
+real mirror, and only two rows carried it.

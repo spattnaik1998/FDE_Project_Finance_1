@@ -450,6 +450,43 @@ BEGIN
 END
 GO
 
+/* A verification EVENT, not a correction to the artefact.
+
+   ref.source_document is deliberately immutable -- db_fde_load holds
+   DENY UPDATE on it, because a snapshot whose digest can be edited is not a
+   snapshot. So "this mirror was checked against the publisher" cannot be
+   recorded by flipping verified_against_publisher: that would require
+   mutating the very row whose immutability the provenance chain rests on.
+
+   It is also the wrong shape. A verification has a time, a method, a
+   counterpart URL and an outcome, and it can be repeated -- a source that
+   matched last month may not match today if the publisher revises it. A
+   boolean cannot hold that; an append-only log of checks can, including a
+   later FAILED check sitting next to an earlier passing one. */
+IF OBJECT_ID('audit.source_verification') IS NULL
+BEGIN
+    CREATE TABLE audit.source_verification (
+        verification_id   BIGINT IDENTITY(1,1) NOT NULL,
+        source_doc_id     NVARCHAR(64)   NOT NULL,
+        verified_at       DATETIME2      NOT NULL CONSTRAINT DF_srcver_at DEFAULT SYSUTCDATETIME(),
+        method            NVARCHAR(32)   NOT NULL,
+        publisher_url     NVARCHAR(1000) NOT NULL,
+        publisher_sha256  CHAR(64)       NOT NULL,
+        matched           BIT            NOT NULL,
+        note              NVARCHAR(MAX)  NULL,
+        CONSTRAINT PK_source_verification PRIMARY KEY (verification_id),
+        CONSTRAINT FK_srcver_doc    FOREIGN KEY (source_doc_id) REFERENCES ref.source_document (doc_id),
+        CONSTRAINT CK_srcver_sha    CHECK (LEN(publisher_sha256) = 64),
+        CONSTRAINT CK_srcver_method CHECK (method IN ('sha256_match','manual_spot_check')),
+        /* A passing check must carry the publisher URL it was checked against.
+           "Verified" with no counterpart named is not a verification.        */
+        CONSTRAINT CK_srcver_url    CHECK (matched = 0 OR LEN(LTRIM(RTRIM(publisher_url))) > 0)
+    );
+    CREATE INDEX IX_srcver_doc ON audit.source_verification (source_doc_id, verified_at DESC);
+    PRINT 'Created audit.source_verification';
+END
+GO
+
 IF OBJECT_ID('audit.quality_assertion') IS NULL
 BEGIN
     CREATE TABLE audit.quality_assertion (

@@ -777,3 +777,154 @@ def test_what_is_registered_is_what_is_rendered():
             assert figure.literal in body, (
                 f"{figure.literal!r} registered from {figure.origin} but is "
                 f"not in the rendered document")
+
+
+# ===========================================================================
+# Mirror verification: cleared by evidence, not by a flag
+# ===========================================================================
+
+def test_a_digest_match_clears_a_mirror():
+    """Identical bytes against the publisher is the strongest claim available.
+
+    Stronger than sampling values and finding they look right, and it needs no
+    judgement about which values to sample.
+    """
+    source = _source(is_mirror=True, verified=False)
+    cleared = SourceRecord(**{**source.__dict__, "verified_by_digest": True})
+
+    assert source.needs_spot_check
+    assert not cleared.needs_spot_check
+
+
+def test_an_unverified_mirror_still_blocks_delivery():
+    data = _data(sources=[_source(is_mirror=True, verified=False)])
+    markdown, registry = render.render(data)
+    trace = provenance.walk(markdown, registry, data)
+
+    assert not trace.customer_deliverable
+    assert DOC in trace.unverified_mirrors
+
+
+def test_a_verified_mirror_no_longer_blocks_delivery():
+    verified = SourceRecord(
+        **{**_source(is_mirror=True, verified=False).__dict__,
+           "verified_by_digest": True})
+    data = _data(sources=[verified])
+    markdown, registry = render.render(data)
+    trace = provenance.walk(markdown, registry, data)
+
+    assert trace.is_complete, trace.failure_detail()
+    assert trace.customer_deliverable
+    assert trace.unverified_mirrors == []
+
+
+def test_a_non_mirror_never_needs_a_spot_check():
+    assert not _source(is_mirror=False, verified=False).needs_spot_check
+
+
+def test_the_verification_record_is_append_only_in_fact(test_database):
+    """A verification that can be edited afterwards proves nothing.
+
+    Same reason ``ref.source_document`` is immutable: if the record of the
+    check is mutable, the check is not evidence.
+    """
+    from warehouse.session import Principal, connect
+
+    with connect(Principal.DEVELOPER, database=test_database,
+                 autocommit=True) as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            IF NOT EXISTS (SELECT 1 FROM ref.source_document WHERE doc_id = 'ver_doc')
+            INSERT INTO ref.source_document
+                (doc_id, title, publisher, url, format, sha256, bytes,
+                 retrieved_at, is_mirror, verified_against_publisher)
+            VALUES ('ver_doc', 'Mirror fixture', 'Somebody', 'http://m.test',
+                    'xlsx', REPLICATE('9', 64), 10, SYSUTCDATETIME(), 1, 0)""")
+        try:
+            # A passing check must name the publisher URL it checked against.
+            with pytest.raises(Exception):
+                cur.execute("""INSERT INTO audit.source_verification
+                                   (source_doc_id, method, publisher_url,
+                                    publisher_sha256, matched)
+                               VALUES ('ver_doc', 'sha256_match', '',
+                                       REPLICATE('9', 64), 1)""")
+
+            # A digest that is not 64 characters is not a SHA-256.
+            with pytest.raises(Exception):
+                cur.execute("""INSERT INTO audit.source_verification
+                                   (source_doc_id, method, publisher_url,
+                                    publisher_sha256, matched)
+                               VALUES ('ver_doc', 'sha256_match', 'http://p.test',
+                                       'tooshort', 1)""")
+
+            # An unrecognised method is refused.
+            with pytest.raises(Exception):
+                cur.execute("""INSERT INTO audit.source_verification
+                                   (source_doc_id, method, publisher_url,
+                                    publisher_sha256, matched)
+                               VALUES ('ver_doc', 'vibes', 'http://p.test',
+                                       REPLICATE('9', 64), 1)""")
+        finally:
+            cur.execute("DELETE FROM audit.source_verification WHERE source_doc_id='ver_doc'")
+            cur.execute("DELETE FROM ref.source_document WHERE doc_id='ver_doc'")
+
+
+def test_a_mismatched_verification_does_not_clear_the_mirror(test_database):
+    """Recording a FAILED check must not look like clearing it.
+
+    The reader only accepts a verification whose publisher digest equals the
+    artefact's own, so a mismatch -- or a check recorded against some other
+    version -- leaves the mirror blocking.
+    """
+    from warehouse.session import Principal, connect
+
+    with connect(Principal.DEVELOPER, database=test_database,
+                 autocommit=True) as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            IF NOT EXISTS (SELECT 1 FROM ref.source_document WHERE doc_id = 'mis_doc')
+            INSERT INTO ref.source_document
+                (doc_id, title, publisher, url, format, sha256, bytes,
+                 retrieved_at, is_mirror, verified_against_publisher)
+            VALUES ('mis_doc', 'Mirror fixture', 'Somebody', 'http://m.test',
+                    'xlsx', REPLICATE('a', 64), 10, SYSUTCDATETIME(), 1, 0)""")
+        try:
+            # matched = 0: the publisher's copy differed.
+            cur.execute("""INSERT INTO audit.source_verification
+                               (source_doc_id, method, publisher_url,
+                                publisher_sha256, matched)
+                           VALUES ('mis_doc', 'sha256_match', 'http://p.test',
+                                   REPLICATE('b', 64), 0)""")
+            row = cur.execute("""
+                SELECT MAX(CASE WHEN v.matched = 1
+                                 AND v.publisher_sha256 = d.sha256
+                                THEN 1 ELSE 0 END)
+                FROM ref.source_document d
+                LEFT JOIN audit.source_verification v
+                       ON v.source_doc_id = d.doc_id
+                WHERE d.doc_id = 'mis_doc'
+                GROUP BY d.sha256""").fetchone()
+            assert row[0] == 0, "a failed check must not clear the mirror"
+
+            # A *passing* check recorded against a different digest must also
+            # not clear it: that verified some other version of the file.
+            cur.execute("""INSERT INTO audit.source_verification
+                               (source_doc_id, method, publisher_url,
+                                publisher_sha256, matched)
+                           VALUES ('mis_doc', 'sha256_match', 'http://p.test',
+                                   REPLICATE('c', 64), 1)""")
+            row = cur.execute("""
+                SELECT MAX(CASE WHEN v.matched = 1
+                                 AND v.publisher_sha256 = d.sha256
+                                THEN 1 ELSE 0 END)
+                FROM ref.source_document d
+                LEFT JOIN audit.source_verification v
+                       ON v.source_doc_id = d.doc_id
+                WHERE d.doc_id = 'mis_doc'
+                GROUP BY d.sha256""").fetchone()
+            assert row[0] == 0, (
+                "a passing check against a different digest verified a "
+                "different version and must not clear this one")
+        finally:
+            cur.execute("DELETE FROM audit.source_verification WHERE source_doc_id='mis_doc'")
+            cur.execute("DELETE FROM ref.source_document WHERE doc_id='mis_doc'")
