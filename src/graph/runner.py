@@ -17,6 +17,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+import config
 from graph import build
 from nodes.state import NodeDeps, Phase, RunState
 from providers.accounting import Ledger
@@ -60,19 +61,68 @@ class RunOutcome:
         }
 
 
+def load_cohort_reference(classifier: str, *, database: str | None = None
+                          ) -> tuple[dict[str, float], dict[str, float],
+                                     list[float]]:
+    """Read the cohort reference set and its benchmark values.
+
+    Done here, in the application tier, because this tier holds the credential.
+    ``NodeDeps`` promises a node has none, so the alternative -- a node opening
+    its own connection -- would retract the invariant the tier split rests on.
+
+    Returns two empty dicts when no reference set exists for this classifier,
+    which makes calibration degrade to "not identifiable" rather than to a
+    percentile computed against an arbitrary set of rows.
+    """
+    from scoring import cohort as cohort_module
+    from scoring.run import RUBRIC_VERSION
+
+    try:
+        with connect(Principal.SCORE, database=database) as conn:
+            cursor = conn.cursor()
+            indices = cohort_module.load_cohort(
+                cursor, classifier=classifier, rubric_version=RUBRIC_VERSION)
+            if not indices:
+                LOG.info("cohort=absent classifier=%s rubric=%s",
+                         classifier, RUBRIC_VERSION)
+                return {}, {}, []
+            benchmarks = cohort_module.load_benchmarks(
+                cursor, socs=list(indices),
+                measure="AIOE_language_modeling")
+            population = cohort_module.load_population(
+                cursor, measure="AIOE_language_modeling")
+    except Exception as exc:                      # noqa: BLE001 - degrade
+        LOG.warning("cohort lookup failed status=degraded error=%s", exc)
+        return {}, {}, []
+
+    LOG.info("cohort=loaded classifier=%s members=%s benchmarked=%s "
+             "population=%s", classifier, len(indices), len(benchmarks),
+             len(population))
+    return indices, benchmarks, population
+
+
 def make_deps(run_id: str, *, database: str | None = None, provider_for=None,
-              our_percentile: float | None = None) -> NodeDeps:
+              our_percentile: float | None = None,
+              classifier: str | None = None) -> NodeDeps:
     """Assemble the dependencies a run needs.
 
     ``provider_for`` is injectable so a test can drive the whole graph without
-    a model call.
+    a model call. ``classifier`` selects which cohort reference set to rank
+    against; a reference set scored by a different classifier is not a
+    reference set for this run, so the key includes it.
     """
     tracker = ConsumptionTracker(run_id=run_id)
     audit = AuditAdapter(run_id=run_id, database=database)
+    indices, benchmarks, population = ({}, {}, [])
+    if classifier:
+        indices, benchmarks, population = load_cohort_reference(
+            classifier, database=database)
     return NodeDeps(
         tools=EvidenceTools(tracker=tracker, audit=audit, database=database),
         tracker=tracker, audit=audit, ledger=Ledger(run_id=run_id),
-        provider_for=provider_for, our_percentile=our_percentile)
+        provider_for=provider_for, our_percentile=our_percentile,
+        cohort_indices=indices, cohort_benchmarks=benchmarks,
+        cohort_population=population)
 
 
 def invoke(request: str, *, deliverable: bool = False,
@@ -80,12 +130,14 @@ def invoke(request: str, *, deliverable: bool = False,
            deps: NodeDeps | None = None,
            context: scoring_run.RunContext | None = None,
            our_percentile: float | None = None,
+           classifier: str | None = None,
            persist: bool = True) -> RunOutcome:
     """Run one analysis end to end."""
     context = context or scoring_run.new_run(is_customer_deliverable=deliverable)
     deps = deps or make_deps(context.run_id, database=database,
                              provider_for=provider_for,
-                             our_percentile=our_percentile)
+                             our_percentile=our_percentile,
+                             classifier=classifier or config.MODEL_CLASSIFIER)
 
     graph = build.compile_graph(deps, deliverable=deliverable, database=database)
     initial = RunState(run_id=context.run_id, request=request)

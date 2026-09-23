@@ -397,6 +397,40 @@ GO
 PRINT 'Created audit.trg_AgentAuditLog_append_only';
 GO
 
+/* The cohort reference set: our exposure index per occupation, under one
+   classifier and one rubric.
+
+   Calibration needs a percentile, a percentile needs a distribution, and both
+   our index and the published benchmark have to be ranked within the SAME
+   reference set. That reference set is expensive -- one model call per task
+   across every cohort member -- so it is computed once and stored here rather
+   than recomputed per run. A graph run then ranks itself against these rows.
+
+   Keyed on (classifier, rubric_version, soc_code) because a cohort scored by
+   two different classifiers is not one cohort. Mixing them would make a
+   percentile an artefact of which occupation got which method, so the key
+   makes that unrepresentable rather than merely discouraged. */
+IF OBJECT_ID('score.cohort_index') IS NULL
+BEGIN
+    CREATE TABLE score.cohort_index (
+        cohort_name      NVARCHAR(64)  NOT NULL,
+        classifier       NVARCHAR(64)  NOT NULL,
+        rubric_version   NVARCHAR(16)  NOT NULL,
+        soc_code         NVARCHAR(16)  NOT NULL,
+        exposure_index   DECIMAL(5,3)  NOT NULL,
+        tasks_scored     INT           NOT NULL,
+        source_run_id    UNIQUEIDENTIFIER NULL,
+        computed_at      DATETIME2     NOT NULL CONSTRAINT DF_cohort_at DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT PK_cohort_index PRIMARY KEY
+            (cohort_name, classifier, rubric_version, soc_code),
+        CONSTRAINT FK_cohort_occ   FOREIGN KEY (soc_code) REFERENCES ref.occupation (soc_code),
+        CONSTRAINT CK_cohort_index CHECK (exposure_index BETWEEN 0 AND 1),
+        CONSTRAINT CK_cohort_tasks CHECK (tasks_scored > 0)
+    );
+    PRINT 'Created score.cohort_index';
+END
+GO
+
 /* Which immutable sources a run ACTUALLY CONSUMED. No source_version column:
    under append-only, source_doc_id IS the version identity (TDD 3.3). */
 IF OBJECT_ID('audit.run_source_binding') IS NULL

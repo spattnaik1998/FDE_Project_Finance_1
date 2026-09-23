@@ -17,7 +17,7 @@ import logging
 
 from nodes import retrieval
 from nodes.state import NodeDeps, Phase, RunState
-from scoring import calibration, exposure, lag as lag_model
+from scoring import calibration, cohort as cohort_module, exposure, lag as lag_model
 from scoring.schemas import RoleVerdict
 from scoring.run import STANDING_CAVEATS
 
@@ -29,6 +29,36 @@ ASSEMBLE_NODE = "3D. Assemble Verdict"
 
 ADJACENT_SOC = "13-2099.01"
 BENCHMARK_MEASURE = "AIOE_language_modeling"
+
+
+def _cohort_calibration(state: RunState, deps: NodeDeps):
+    """Rank this run's index inside the cohort reference set, if one was given.
+
+    The reference set is *handed in*, not fetched. ``NodeDeps`` states that a
+    node holds no database connection and no credential, and reaches data only
+    through ``tools`` -- so loading the cohort here would break the invariant
+    the whole tier design rests on. The runner holds the credential and injects
+    the rows; this function only ranks them.
+
+    Returns ``None`` when no reference set was supplied, which leaves the prior
+    behaviour intact: no percentile, and ``review_required`` with a stated
+    reason. A missing cohort must degrade to "not identifiable", never to a
+    percentile computed against whatever rows happen to be available.
+    """
+    if state.scope is None or state.primary_weighting is None:
+        return None
+    if not deps.cohort_indices or not deps.cohort_benchmarks:
+        return None
+
+    # This run's own index supersedes the stored one for the target occupation:
+    # the customer is asking about *this* run, not the one that built the
+    # reference set.
+    indices = dict(deps.cohort_indices)
+    indices[state.scope.soc_code] = state.primary_weighting.lower
+
+    return cohort_module.calibrate_within_cohort(
+        state.scope.soc_code, indices, deps.cohort_benchmarks,
+        population_values=deps.cohort_population)
 
 
 def score_exposure(state: RunState, deps: NodeDeps) -> RunState:
@@ -125,12 +155,40 @@ def assemble_verdict(state: RunState, deps: NodeDeps) -> RunState:
                      and state.evidence.benchmarks[0].get("Percentile") is not None
                      else None)
 
-    # None by construction on a single-occupation run: a percentile is a rank
-    # within a distribution, and one score has no rank. The consequence is that
-    # calibration always returns review_required today, so the graph cannot
-    # currently produce a report -- a documented limitation, not a defect.
+    # Calibration against the persisted cohort reference set. A percentile is
+    # a rank, so this run's index has to be ranked inside a distribution -- and
+    # the benchmark has to be ranked inside the *same* one, or the two
+    # percentiles describe different populations and the comparison measures
+    # nothing. The cohort is read rather than computed: deriving it costs one
+    # model call per task across every member, which is not something an
+    # interactive run should pay to answer a question about one occupation.
+    #
+    # ``deps.our_percentile`` remains as an override for tests that need a
+    # specific percentile; production leaves it None and the cohort decides.
+    cohort_result = _cohort_calibration(state, deps)
+    our_pct = deps.our_percentile
+    rank_correlation = None
+    explanation = None
+
+    if cohort_result is not None:
+        if deps.our_percentile is None:
+            our_pct = cohort_result.our_percentile
+            # Both sides ranked in the cohort, so the benchmark's own published
+            # percentile (a rank among 774) is replaced by its cohort rank.
+            if cohort_result.benchmark_percentile is not None:
+                benchmark_pct = cohort_result.benchmark_percentile
+        rank_correlation = cohort_result.rank_correlation
+        explanation = cohort_module.cohort_explanation(cohort_result)
+        state.unresolved.append(
+            f"Calibration is relative to a cohort of "
+            f"{cohort_result.cohort_size} finance occupations (SOC 13-2*), at "
+            f"{cohort_result.granularity_points} percentile points of "
+            f"resolution; it is not a rank within the benchmark's full "
+            f"population.")
+
     calibration_result = calibration.calibrate(
-        deps.our_percentile, benchmark_pct, benchmark_measure=BENCHMARK_MEASURE)
+        our_pct, benchmark_pct, benchmark_measure=BENCHMARK_MEASURE,
+        rank_correlation=rank_correlation, explanation=explanation)
 
     caveats = list(STANDING_CAVEATS)
 
