@@ -23,8 +23,35 @@ from scoring.schemas import CalibrationOutcome, CalibrationResult
 
 LOG = logging.getLogger("scoring.calibration")
 
-CALIBRATION_POLICY_VERSION = "provisional_v1"
+# Bumped from provisional_v1 when cohort calibration arrived: the criterion
+# itself changed, so a figure calibrated under the old rule is not comparable
+# to one calibrated under this one. The version is the only thing that tells
+# those two apart in the audit record.
+CALIBRATION_POLICY_VERSION = "provisional_v2_cohort"
 DEFAULT_TOLERANCE_POINTS = 15.0
+
+# A cohort comparison must clear two bars, not one. The first cohort run found
+# out why: the target occupation sat at rank 7 of 12 in BOTH orderings, giving
+# a delta of exactly 0.0 and a clean pass -- while Spearman's rho across the
+# same cohort was -0.45. The orderings disagreed almost completely and the
+# matching rank was coincidence. A single-point delta cannot see that, and a
+# gate that reads only the delta will pass a rubric that anti-correlates with
+# the benchmark.
+#
+# So: a negative rho can never pass, and weak positive agreement is held for
+# review. Provisional like the tolerance -- with 12 points rho has wide
+# variance, and the floor should be set from the empirical distribution once
+# more cohorts exist rather than from this one.
+MIN_RANK_CORRELATION = 0.30
+
+ANTI_CORRELATED_EXPLANATION = (
+    "Our index and the published benchmark order this cohort in substantially "
+    "different ways (rank correlation {rho}). The target occupation's "
+    "percentile delta of {delta} is therefore not evidence of agreement: a "
+    "single rank can coincide while the orderings diverge. Ordering agreement "
+    "is the meaningful test for two indices on different scales, so the run is "
+    "held rather than passed on the delta alone."
+)
 
 SINGLE_OCCUPATION_EXPLANATION = (
     "Our percentile is not identifiable from a single scored occupation. A "
@@ -58,6 +85,7 @@ def calibrate(our_percentile: float | None,
               *,
               benchmark_measure: str,
               tolerance_points: float = DEFAULT_TOLERANCE_POINTS,
+              rank_correlation: float | None = None,
               explanation: str | None = None) -> CalibrationResult:
     """Compare our percentile with a published one and emit one of three states.
 
@@ -85,6 +113,24 @@ def calibrate(our_percentile: float | None,
     delta = round(our_percentile - benchmark_percentile, 2)
     within = abs(delta) <= tolerance_points
 
+    # The ordering check. Only applies when a cohort-wide correlation was
+    # supplied; a single-occupation run has no ordering to correlate and is
+    # already held above.
+    ordering_disagrees = (rank_correlation is not None
+                          and rank_correlation < MIN_RANK_CORRELATION)
+
+    if within and ordering_disagrees:
+        # The case that motivated this check: delta says agree, rho says no.
+        return CalibrationResult(
+            benchmark_measure=benchmark_measure,
+            benchmark_percentile=benchmark_percentile,
+            our_percentile=our_percentile, delta=delta,
+            within_tolerance=within,
+            outcome=CalibrationOutcome.REVIEW_REQUIRED,
+            explanation=(explanation or "") + (" " if explanation else "")
+            + ANTI_CORRELATED_EXPLANATION.format(rho=rank_correlation,
+                                                 delta=delta))
+
     if within:
         outcome = CalibrationOutcome.PASS
         detail = explanation
@@ -97,9 +143,10 @@ def calibrate(our_percentile: float | None,
         outcome = CalibrationOutcome.GATE_REJECTED
         detail = None
 
-    LOG.info("policy=%s status=%s benchmark=%.2f ours=%.2f delta=%+.2f tolerance=%.1f",
-             CALIBRATION_POLICY_VERSION, outcome.value, benchmark_percentile,
-             our_percentile, delta, tolerance_points)
+    LOG.info("policy=%s status=%s benchmark=%.2f ours=%.2f delta=%+.2f "
+             "tolerance=%.1f rho=%s", CALIBRATION_POLICY_VERSION,
+             outcome.value, benchmark_percentile, our_percentile, delta,
+             tolerance_points, rank_correlation)
 
     return CalibrationResult(
         benchmark_measure=benchmark_measure,

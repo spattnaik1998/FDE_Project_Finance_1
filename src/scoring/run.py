@@ -111,6 +111,7 @@ def build_verdict(*, soc_code: str,
                   adjacent_weights: Sequence[float] | None = None,
                   adjacent_soc: str = "13-2099.01",
                   our_percentile: float | None = None,
+                  rank_correlation: float | None = None,
                   calibration_explanation: str | None = None
                   ) -> tuple[RoleVerdict, list[TaskScore]]:
     """Assemble a role verdict from the two independent paths.
@@ -132,6 +133,7 @@ def build_verdict(*, soc_code: str,
     calibration_result = calibration.calibrate(
         our_percentile, benchmark_percentile,
         benchmark_measure=benchmark_measure,
+        rank_correlation=rank_correlation,
         explanation=calibration_explanation)
 
     caveats = list(STANDING_CAVEATS)

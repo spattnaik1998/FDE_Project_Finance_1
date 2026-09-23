@@ -81,11 +81,23 @@ def main() -> None:
     print()
 
     if verdict:
-        print(f"  EXPOSURE  {verdict.exposure_index:.3f}   "
-              f"(sensitivity {verdict.sensitivity_low:.3f}–{verdict.sensitivity_high:.3f})")
+        # The sensitivity is a WeightingBound, not two scalars. An earlier
+        # version of this script read verdict.sensitivity_low / _high, which
+        # do not exist -- and it never surfaced because the full path had only
+        # ever been driven with --topology-only or through runner.invoke
+        # directly. The first real end-to-end run crashed here, after the graph
+        # had already succeeded and persisted.
+        sensitivity = verdict.sensitivity_weighting
+        bound = (f"sensitivity {sensitivity.lower:.3f}–{sensitivity.upper:.3f}"
+                 if sensitivity else "no adjacent-SOC sensitivity available")
+        print(f"  EXPOSURE  {verdict.exposure_index:.3f}   ({bound})")
         print(f"  LAG       p10 {verdict.lag.p10} | p50 {verdict.lag.p50} | "
               f"p90 {verdict.lag.p90}   curve fitted: {verdict.lag.curve_fitted}")
-        print(f"  CALIBRATION  {verdict.calibration.outcome}")
+        calibration = verdict.calibration
+        print(f"  CALIBRATION  {calibration.outcome.value}  "
+              f"ours={calibration.our_percentile} "
+              f"benchmark={calibration.benchmark_percentile} "
+              f"delta={calibration.delta}")
     else:
         print("  NO VERDICT — the graph halted before assembly")
 

@@ -730,6 +730,90 @@ disappears instead of moving. `langgraph` itself never depended on starlette
 `pillow<12` cap was tested and does not bite: 1.49.1 runs on pillow 12.3.0,
 which keeps an unrelated package of the user's working.
 
+## Cohort calibration (W9 — complete)
+
+```bash
+python scripts/load_cohort.py --dry-run        # what would be loaded
+python scripts/load_cohort.py                  # 12 occupations, 231 tasks
+python scripts/score_cohort.py --classifier baseline          # free
+python scripts/score_cohort.py --classifier model --persist   # the reference set
+```
+
+Calibration had never been reachable. The stated reason — one occupation has no
+rank — was only half of it, and the other half was worse.
+
+### Two problems, not one
+
+1. **A percentile needs a distribution.** `percentile_within` refuses fewer
+   than ten points. Scoring one more occupation would not have helped; the
+   floor is 10.
+2. **Ranks in different populations are not comparable.** Felten/Raj/Seamans
+   place Financial Analysts at the 87th percentile *of 774 occupations*. Our
+   index ranked among a handful we scored is a percentile of a different
+   population. Comparing the two numbers would have looked like calibration and
+   measured nothing.
+
+### The fix: rank both series in the same cohort
+
+Score N occupations, rank our index among those N, rank the published benchmark
+among **those same N**, compare those. Both percentiles then describe one
+reference set and the comparison is identified.
+
+This is also the right comparison for two different estimands. AIOE is a
+standardised index over work activities; ours is a task rubric with a tacitness
+discount. Their *levels* were never commensurable, so a level comparison was
+always going to be noise. Whether the two **orderings** agree is the meaningful
+question, which is a rank question — so the cohort-wide statistic is Spearman's
+rho and the per-occupation delta is its local view.
+
+The cohort is every SOC 13-2\* occupation with both O*NET task statements and an
+AIOE value: **12 occupations, 231 tasks**. Nothing was fetched — the O*NET dump
+already in `data/docs` covers all 923 occupations and was already hashed. Only
+13-2051 had ever been loaded.
+
+One detail code per 6-digit SOC, because AIOE keys on 6 digits: loading both
+13-2099.01 and .04 would put one benchmark observation into the distribution
+twice.
+
+### The defect the first cohort run exposed
+
+The baseline cohort produced **delta 0.0 → `pass`**. It also produced **rank
+correlation −0.4476**.
+
+The target sat at rank 7 of 12 in *both* orderings by coincidence while the
+orderings ran roughly opposite. A gate reading only the target's delta would
+have certified a rubric that anti-correlates with the benchmark — which is the
+exact failure mode of single-point calibration.
+
+So the gate now requires **both** bars: delta within tolerance **and** rank
+correlation at or above a floor. `MIN_RANK_CORRELATION = 0.30`, provisional
+like the tolerance and labelled as such. `CALIBRATION_POLICY_VERSION` moved to
+`provisional_v2_cohort`, because the criterion itself changed and a figure
+calibrated under the old rule is not comparable to one under the new.
+
+### The reference set is stored, not recomputed
+
+Deriving the cohort costs one model call per task across every member. An
+interactive run cannot pay that to answer a question about one occupation, so
+`score.cohort_index` holds it, keyed on `(cohort, classifier, rubric_version)`
+— a cohort scored by two classifiers is not one cohort, and the key makes the
+mixture unrepresentable rather than merely discouraged.
+
+`graph/runner.load_cohort_reference` reads it and injects it into `NodeDeps`.
+The node ranks but never loads: `NodeDeps` promises a node holds no credential
+and reaches data only through `tools`, and a node opening its own connection
+would have quietly retracted that. A missing reference set degrades to "not
+identifiable", never to a percentile over whatever rows happen to be present.
+
+### Honest limits, both reported in the output
+
+- **Granularity** is 100/N — 8.33 percentile points at N=12, against a ±15
+  tolerance. Finer than the tolerance, but one position change moves the delta
+  by more than half of it.
+- **Cohort dependence.** A percentile within a chosen cohort is a statement
+  about that cohort. This one is the finance family: the right frame for the
+  customer question, the wrong frame for any claim about the whole economy.
+
 ## Stack verification
 
 ```bash

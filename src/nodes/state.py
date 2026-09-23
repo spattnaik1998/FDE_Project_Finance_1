@@ -174,6 +174,17 @@ class NodeDeps:
     # which production therefore cannot currently reach -- stays testable.
     our_percentile: float | None = None
 
+    # The cohort reference set, injected by the runner. Nodes rank within it
+    # but never load it: this dataclass promises a node holds no credential,
+    # and a node that opened its own connection to fetch the cohort would
+    # quietly retract that promise.
+    cohort_indices: dict[str, float] | None = None
+    cohort_benchmarks: dict[str, float] | None = None
+    # The benchmark's full published population, for the spread diagnostic:
+    # a rank comparison against a benchmark that does not vary inside the
+    # cohort is under-powered, and the run should say so.
+    cohort_population: list[float] | None = None
+
     def provider(self, stage):
         """Resolve the provider for a stage, defaulting to the real registry."""
         if self.provider_for is not None:

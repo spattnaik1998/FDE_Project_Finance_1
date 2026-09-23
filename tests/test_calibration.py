@@ -135,8 +135,27 @@ def test_only_a_pass_allows_a_report_without_intervention():
 # --- Policy versioning ------------------------------------------------------
 
 def test_tolerance_is_labelled_provisional():
-    """It is an engineering bootstrap, not a validated criterion."""
-    assert calibration.CALIBRATION_POLICY_VERSION == "provisional_v1"
+    """It is an engineering bootstrap, not a validated criterion.
+
+    Asserts the *property* rather than a literal version string. The criterion
+    is expected to change -- it did when cohort calibration arrived, and the
+    version moved with it -- and a test pinned to one spelling fails on the
+    version bump while saying nothing about whether the label is still honest.
+    """
+    version = calibration.CALIBRATION_POLICY_VERSION
+    assert version.startswith("provisional"), (
+        f"{version!r} no longer declares itself provisional; if the criterion "
+        f"has actually been validated, this test should be replaced rather "
+        f"than relaxed")
+
+
+def test_the_policy_version_is_recorded_on_every_run():
+    """A figure is only comparable to one calibrated under the same rule."""
+    from scoring import run as scoring_run
+
+    context = scoring_run.new_run()
+    assert (context.calibration_policy_version
+            == calibration.CALIBRATION_POLICY_VERSION)
 
 
 def test_tolerance_is_configurable_per_run():

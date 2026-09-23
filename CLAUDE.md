@@ -908,3 +908,73 @@ reasoning, so nobody upgrades back into the broken state.
 Next: W8 was the last workstream in `docs/build_plan.md`. The build plan is
 complete; what remains is the environment work only you can do, and a second
 occupation to make calibration identifiable.
+
+---
+
+## W9 complete — cohort calibration (2026-09-22)
+
+648 tests pass, 30 skip with stated reasons (36 new in `tests/test_cohort.py`). Branch `feat/p9-cohort-calibration`.
+
+**A correction first.** I told you scoring one more occupation would make the
+calibration gate functional. That was wrong. `percentile_within` already
+refused distributions below ten points, so a second occupation would have
+changed nothing — and there was a second, worse problem I had not seen:
+Felten/Raj/Seamans rank Financial Analysts among **774 occupations**, so our
+index ranked among a handful we scored is a percentile of a different
+population. Comparing the two would have looked like calibration and measured
+nothing.
+
+**The fix: rank both series within the same cohort.** Score N occupations, rank
+our index among those N, rank the benchmark among *those same N*. Both
+percentiles then describe one reference set and the comparison is identified.
+
+This is also the right comparison for two different estimands. AIOE is a
+standardised index over work activities; ours is a task rubric with a tacitness
+discount. Their *levels* were never commensurable, so a level comparison was
+always noise. Whether the **orderings** agree is the meaningful question — a
+rank question — so the cohort statistic is Spearman's rho and the
+per-occupation delta is its local view.
+
+**The cohort was already on disk.** Every SOC 13-2* occupation with both O*NET
+tasks and an AIOE value: **12 occupations, 231 tasks**. Nothing was fetched —
+the O*NET dump in `data/docs` covers all 923 occupations and was already
+hashed. Only 13-2051 had ever been loaded. One detail code per 6-digit SOC,
+because AIOE keys on 6 digits and loading both 13-2099.01 and .04 would put one
+benchmark observation into the distribution twice.
+
+**The defect the first cohort run exposed, and this is the important part.**
+The baseline cohort produced **delta 0.0 → `pass`** and **rank correlation
+−0.4476** simultaneously. The target sat at rank 7 of 12 in *both* orderings by
+coincidence while the orderings ran roughly opposite. A gate reading only the
+target's delta would have certified a rubric that anti-correlates with the
+benchmark — the exact failure mode of single-point calibration, which is the
+thing cohort calibration was supposed to fix.
+
+The gate now requires **both** bars: delta within tolerance **and** rank
+correlation ≥ `MIN_RANK_CORRELATION` (0.30, provisional and labelled so).
+`CALIBRATION_POLICY_VERSION` moved to `provisional_v2_cohort` because the
+criterion changed and a figure calibrated under the old rule is not comparable
+to one under the new.
+
+**The reference set is stored, not recomputed.** Deriving it costs one model
+call per task across every member; an interactive run cannot pay that to answer
+a question about one occupation. `score.cohort_index` holds it, keyed on
+`(cohort, classifier, rubric_version)` — a cohort scored by two classifiers is
+not one cohort, and the key makes the mixture unrepresentable rather than
+merely discouraged.
+
+**An invariant I broke and then fixed.** My first cut had the graph node open
+its own connection to load the cohort. `NodeDeps` states in its own docstring
+that a node holds no credential and reaches data only through `tools`, and that
+is what the tier split rests on. Moved to `graph/runner.load_cohort_reference`,
+which is the application tier and legitimately holds the credential; the node
+ranks but never loads. A missing reference set degrades to "not identifiable",
+never to a percentile over whatever rows happen to be present.
+
+**Limits, reported in the output rather than buried.** Granularity is 100/N —
+8.33 points at N=12 against a ±15 tolerance, so one position change moves the
+delta by more than half the tolerance. And a percentile within a chosen cohort
+is a statement about that cohort: this one is the finance family, which is the
+right frame for the customer question and the wrong frame for any claim about
+the whole economy. Both are appended to the run's `unresolved` list and reach
+the report and the UI.
