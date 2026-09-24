@@ -372,3 +372,50 @@ def test_an_absent_diagnostic_is_not_read_as_a_finding():
 
     assert result.benchmark_spread_ratio is None
     assert result.benchmark_discriminates is True
+
+
+# ===========================================================================
+# The cohort must be readable by the tier that uses it
+# ===========================================================================
+
+def test_the_cohort_reads_facts_not_the_agents_views():
+    """Structural check: the scoring tier must not depend on db_fde_ro's views.
+
+    load_benchmarks originally read dbo.VW_EXPOSURE_BENCHMARK. That works under
+    the developer fallback and fails the moment privilege isolation is enabled,
+    because the VW_* layer is the AGENT's scope control and is granted to
+    db_fde_ro alone. The cohort runs in the scoring tier under db_fde_score.
+
+    It degraded correctly rather than fabricating -- the lookup logged and
+    calibration fell back to "not identifiable" -- but the feature was silently
+    off. Reading the fact table is the fix; widening the view grants would have
+    blurred the tiers to paper over a layering mistake.
+    """
+    from pathlib import Path
+
+    source = Path("src/scoring/cohort.py").read_text(encoding="utf-8")
+    sql_lines = [line for line in source.splitlines()
+                 if "SELECT" in line.upper() or "FROM" in line.upper()]
+    offenders = [line.strip() for line in sql_lines
+                 if "dbo.VW_" in line and not line.lstrip().startswith("#")]
+
+    assert not offenders, (
+        f"scoring/cohort.py reads the agent's view layer: {offenders}. "
+        f"db_fde_score is not granted on dbo.VW_*; read core.* instead.")
+
+
+def test_the_cohort_query_filters_to_current_versions():
+    """Append-only keeps superseded rows; ranking both would double-count.
+
+    The view this replaced filtered is_current = 1, so dropping the filter
+    would silently rank one occupation twice and shift every percentile.
+    """
+    from pathlib import Path
+
+    source = Path("src/scoring/cohort.py").read_text(encoding="utf-8")
+    for function in ("def load_benchmarks", "def load_population"):
+        start = source.index(function)
+        body = source[start:start + 1400]
+        assert "is_current = 1" in body, (
+            f"{function} must filter to current versions; under append-only a "
+            f"superseded row is still present")

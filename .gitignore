@@ -37,3 +37,8 @@ Diagrams/Windows_Authentication.png
 .vscode/
 .idea/
 *.log
+
+# Generated deliverable. scripts/generate_report.py writes here by default, so
+# an ad-hoc run must not land in a commit. A deliberate sample belongs under
+# docs/ with its run id stated, not at the repo root where it reads like source.
+report.md

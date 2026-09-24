@@ -386,9 +386,23 @@ def load_benchmarks(cursor, *, socs, measure: str) -> dict[str, float]:
         return {}
     bases = {soc: soc.split(".")[0] for soc in socs}
     placeholders = ",".join("?" for _ in set(bases.values()))
+    # core.exposure_estimate, not dbo.VW_EXPOSURE_BENCHMARK.
+    #
+    # The VW_* layer is the AGENT's scope control and is granted to db_fde_ro
+    # alone. This runs in the scoring tier under db_fde_score, which is granted
+    # SELECT on SCHEMA::core by design -- it is the tier that computes over
+    # facts. Reading the agent's view from here failed the moment privilege
+    # isolation was enabled, and the right fix was to read the fact table rather
+    # than widen the view grants and blur the tiers.
+    #
+    # is_current = 1 reproduces the view's filter, so the cohort ranks the same
+    # rows the agent would see. Under append-only persistence a superseded
+    # version is still present, and including it would rank one occupation
+    # twice.
     rows = cursor.execute(f"""
-        SELECT SOC_Code, Percentile FROM dbo.VW_EXPOSURE_BENCHMARK
-        WHERE Measure = ? AND SOC_Code IN ({placeholders})""",
+        SELECT soc_code, percentile FROM core.exposure_estimate
+        WHERE measure = ? AND is_current = 1
+          AND soc_code IN ({placeholders})""",
         measure, *sorted(set(bases.values()))).fetchall()
     by_base = {r[0]: float(r[1]) for r in rows if r[1] is not None}
     return {soc: by_base[base] for soc, base in bases.items()
@@ -405,7 +419,8 @@ def load_population(cursor, *, measure: str) -> list[float]:
     impossibility is what exposed the unit mismatch. The two series in a ratio
     have to be measured the same way.
     """
+    # Same reasoning as load_benchmarks: the fact table, not the agent's view.
     rows = cursor.execute("""
-        SELECT Percentile FROM dbo.VW_EXPOSURE_BENCHMARK WHERE Measure = ?""",
-        measure).fetchall()
+        SELECT percentile FROM core.exposure_estimate
+        WHERE measure = ? AND is_current = 1""", measure).fetchall()
     return [float(r[0]) for r in rows if r[0] is not None]
