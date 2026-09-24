@@ -81,9 +81,20 @@ ASSERTIONS: list[Assertion] = [
         "The weighting convention must travel with the data, per decision 1."),
     Assertion(
         "views_expose_provenance", "dbo.VW_*",
-        """SELECT 5 - COUNT(DISTINCT c.object_id)
-           FROM sys.columns c JOIN sys.views v ON v.object_id = c.object_id
-           WHERE c.name = 'Source_Doc_ID' AND v.name LIKE 'VW_%'""",
+        # Counts views that LACK the column, rather than subtracting a hardcoded
+        # view count from those that have it.
+        #
+        # The previous form was `SELECT 5 - COUNT(...)`. Adding a sixth view
+        # made it return -1 and fail spuriously -- but the worse case was the
+        # other direction: a sixth view WITHOUT Source_Doc_ID would have left
+        # the count at 5 and the assertion would have passed, missing precisely
+        # the thing it exists to detect. An assertion that hardcodes how many
+        # objects it expects stops being an assertion about the property.
+        """SELECT COUNT(*) FROM sys.views v
+           WHERE v.name LIKE 'VW_%'
+             AND NOT EXISTS (SELECT 1 FROM sys.columns c
+                             WHERE c.object_id = v.object_id
+                               AND c.name = 'Source_Doc_ID')""",
         "run_source_binding cannot be populated if a view hides its source id."),
     Assertion(
         "no_duplicate_current_tasks", "core.task",

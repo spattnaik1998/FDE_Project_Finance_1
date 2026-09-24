@@ -101,3 +101,42 @@ GO
 
 PRINT 'Views ready: VW_ROLE_TASKS, VW_EXPOSURE_BENCHMARK, VW_ADOPTION_CURVE, VW_CLAIM_EVIDENCE, VW_INDUSTRY_METRIC';
 GO
+GO
+
+/* Citation metadata, as a view rather than a carve-out on the base table.
+
+   The tool surface previously whitelisted ref.source_document itself, on the
+   reasoning that it is reference metadata rather than evidence and carries no
+   facts. That reasoning is fine; the implementation was not. sql/04 denies
+   db_fde_ro every object in SCHEMA::ref, so the tool surface and the grant
+   model disagreed -- and while mixed-mode auth was off, both were satisfied
+   vacuously because every connection ran as the developer. The moment real
+   isolation was enabled, get_source_document broke.
+
+   The TDD is not ambiguous about which side is right: the agent reads flat
+   views and is denied every base table. So the sixth published object is a
+   view like the other five, and the exception disappears rather than being
+   granted. Ownership chaining means SELECT here needs no permission on the
+   underlying table, which is exactly the property the view layer exists for.
+
+   Exposes doc_id AS Source_Doc_ID for the same reason the others do: without
+   it audit.run_source_binding cannot be populated from a tool result. */
+CREATE OR ALTER VIEW dbo.VW_SOURCE_DOCUMENT
+AS
+SELECT
+    d.doc_id                      AS Source_Doc_ID,
+    d.doc_id,
+    d.title,
+    d.publisher,
+    d.url,
+    d.format,
+    d.sha256,
+    d.bytes,
+    d.retrieved_at,
+    d.provenance_note,
+    d.is_mirror,
+    d.verified_against_publisher
+FROM ref.source_document AS d;
+GO
+PRINT 'Created dbo.VW_SOURCE_DOCUMENT';
+GO

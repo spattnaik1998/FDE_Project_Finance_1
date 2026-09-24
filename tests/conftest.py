@@ -41,6 +41,37 @@ def _strip_comments(sql: str) -> str:
                      if line.strip() and not line.strip().startswith("--"))
 
 
+PRINCIPAL_ROLES = {
+    "USR_FDE_RO": "db_fde_ro",
+    "USR_FDE_LOAD": "db_fde_load",
+    "USR_FDE_SCORE": "db_fde_score",
+    "USR_FDE_AUDIT": "db_fde_audit",
+}
+
+
+def _map_logins(cursor) -> int:
+    """Create the four database users in the test database and add to roles.
+
+    Returns how many were mapped, which is 0 when mixed-mode auth is off.
+    """
+    mapped = 0
+    for login, role in PRINCIPAL_ROLES.items():
+        exists = cursor.execute(
+            "SELECT COUNT(*) FROM sys.sql_logins WHERE name = ?",
+            login).fetchone()[0]
+        if not exists:
+            continue
+        cursor.execute(f"""
+            USE [{TEST_DB}];
+            IF DATABASE_PRINCIPAL_ID('{login}') IS NULL
+                CREATE USER [{login}] FOR LOGIN [{login}];
+            ALTER ROLE [{role}] ADD MEMBER [{login}];""")
+        while cursor.nextset():
+            pass
+        mapped += 1
+    return mapped
+
+
 @pytest.fixture(scope="session")
 def test_database() -> str:
     """Build the test database from the production DDL, once per session."""
@@ -67,6 +98,25 @@ def test_database() -> str:
             cursor.execute(batch)
             while cursor.nextset():
                 pass
+
+    # Map the four SQL logins into the test database, if they exist.
+    #
+    # sql/06 is deferred here because it is the script that CREATES the logins,
+    # and it does so at server level with `USE FDE_TaskExposure` -- so only
+    # production ever got the database users. The roles exist in the test
+    # database (sql/04 runs against whatever database it is pointed at) but had
+    # no members, so every connection as USR_FDE_* failed to open the database.
+    #
+    # That surfaced the moment mixed-mode auth was enabled: 26 failures and 44
+    # errors across the suite, all "Cannot open database FDE_TaskExposure_Test
+    # requested by the login". The guardrail tests are only meaningful if the
+    # test database reproduces production's security model, so it has to carry
+    # the same users in the same roles.
+    #
+    # Conditional on the logins existing: with mixed-mode auth off there are
+    # none, and the suite falls back to the developer credential exactly as
+    # before.
+    _map_logins(cursor)
     conn.close()
 
     yield TEST_DB

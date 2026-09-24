@@ -39,8 +39,35 @@ class WarehouseError(RuntimeError):
 
 
 def _password_for(principal: Principal) -> str | None:
-    """SQL-login password from the environment. Never read from a file."""
-    return os.environ.get(f"{principal.value}_PASSWORD")
+    """SQL-login password, from the process environment or the project .env.
+
+    This used to read ``os.environ`` only, with the comment "never read from a
+    file". The result was that ``scripts/enable_sql_auth.ps1`` wrote the four
+    passwords to ``.env`` -- the only place it can persist them -- and this
+    function never looked there, so privilege isolation silently never engaged.
+    The instance had mixed-mode auth on, the logins existed, and every
+    connection still fell back to the developer credential.
+
+    The original reasoning was also backwards. An environment variable is
+    inherited by every child process this shell spawns and is readable from a
+    process listing; ``.env`` is access-controlled to its owner, SYSTEM and
+    Administrators by ``scripts/harden_secrets.ps1``. The file is the narrower
+    store, not the wider one.
+
+    Precedence matches ``config.resolve_key``: a value exported for this
+    process wins, because someone set it deliberately; otherwise ``.env``.
+    """
+    name = f"{principal.value}_PASSWORD"
+    explicit = os.environ.get(name)
+    if explicit:
+        return explicit
+    try:
+        import config
+        return config._parse_env_file(config.ENV_PATH).get(name) or None
+    except Exception:                               # noqa: BLE001
+        # A missing or unreadable .env means "no password", which degrades to
+        # the developer fallback with its WARNING -- never to a silent failure.
+        return None
 
 
 def connection_string(principal: Principal = Principal.DEVELOPER,

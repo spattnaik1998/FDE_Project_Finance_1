@@ -40,10 +40,13 @@ ALLOWED_VIEWS = frozenset({
     "dbo.VW_ADOPTION_CURVE",
     "dbo.VW_CLAIM_EVIDENCE",
     "dbo.VW_INDUSTRY_METRIC",
-    # ref.source_document is readable through get_source_document so a citation
-    # can be resolved to its digest and publisher. It is reference metadata,
-    # not evidence, and carries no facts.
-    "ref.source_document",
+    # Citation metadata. Was ref.source_document -- the base table -- on the
+    # reasoning that it is reference metadata rather than evidence. The
+    # reasoning held; the implementation did not. SCHEMA::ref is denied to
+    # db_fde_ro, so the whitelist and the grants contradicted each other, and
+    # while every connection ran as the developer both were satisfied
+    # vacuously. Enabling real isolation broke the tool immediately.
+    "dbo.VW_SOURCE_DOCUMENT",
 })
 
 MAX_ROWS = 2000
@@ -335,8 +338,8 @@ class EvidenceTools:
             SELECT doc_id AS Source_Doc_ID, title, publisher, url, format,
                    sha256, bytes, retrieved_at, provenance_note, is_mirror,
                    verified_against_publisher
-            FROM ref.source_document WHERE doc_id = ?""",
-            (doc_id,), targets=("ref.source_document",))
+            FROM dbo.VW_SOURCE_DOCUMENT WHERE doc_id = ?""",
+            (doc_id,), targets=("dbo.VW_SOURCE_DOCUMENT",))
         if not rows:
             raise ToolError(f"No source document registered as {doc_id!r}")
         return self._finish("get_source_document", rows, None, started)

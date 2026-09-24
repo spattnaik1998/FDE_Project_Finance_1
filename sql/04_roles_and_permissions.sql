@@ -32,6 +32,10 @@ GRANT SELECT ON dbo.VW_EXPOSURE_BENCHMARK  TO db_fde_ro;
 GRANT SELECT ON dbo.VW_ADOPTION_CURVE      TO db_fde_ro;
 GRANT SELECT ON dbo.VW_CLAIM_EVIDENCE      TO db_fde_ro;
 GRANT SELECT ON dbo.VW_INDUSTRY_METRIC     TO db_fde_ro;
+/* Sixth published object. Replaces a whitelist carve-out on
+   ref.source_document, which SCHEMA::ref is denied -- the tool surface and the
+   grants disagreed and only real isolation revealed it. */
+GRANT SELECT ON dbo.VW_SOURCE_DOCUMENT     TO db_fde_ro;
 
 DENY SELECT, INSERT, UPDATE, DELETE ON SCHEMA::ref   TO db_fde_ro;
 DENY SELECT, INSERT, UPDATE, DELETE ON SCHEMA::core  TO db_fde_ro;

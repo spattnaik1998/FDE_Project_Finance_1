@@ -150,10 +150,25 @@ def test_every_spec_has_a_matching_implementation(tools):
         assert callable(getattr(tools, name))
 
 
-def test_allowed_views_are_exactly_the_five_plus_reference_metadata():
-    views = {v for v in ALLOWED_VIEWS if v.startswith("dbo.VW_")}
-    assert len(views) == 5
-    assert ALLOWED_VIEWS - views == {"ref.source_document"}
+def test_allowed_views_are_exactly_the_six_published_views():
+    """Six views, and nothing that is not a view.
+
+    Was "the five plus reference metadata", where the reference metadata was
+    ref.source_document -- a base table. The grants deny db_fde_ro all of
+    SCHEMA::ref, so the whitelist and the permission model contradicted each
+    other, and nothing noticed while every connection ran as the developer.
+    Citation metadata is now dbo.VW_SOURCE_DOCUMENT and the exception is gone.
+    """
+    expected = {
+        "dbo.VW_ROLE_TASKS",
+        "dbo.VW_EXPOSURE_BENCHMARK",
+        "dbo.VW_ADOPTION_CURVE",
+        "dbo.VW_CLAIM_EVIDENCE",
+        "dbo.VW_INDUSTRY_METRIC",
+        "dbo.VW_SOURCE_DOCUMENT",
+    }
+    assert set(ALLOWED_VIEWS) == expected
+    assert all(v.startswith("dbo.VW_") for v in ALLOWED_VIEWS)
 
 
 # ===========================================================================
@@ -191,8 +206,15 @@ def test_no_tool_references_a_base_table_in_its_sql():
            if "SELECT" in s.upper() and "FROM" in s.upper()]
     assert sql, "no SQL found to check; the test would pass vacuously"
 
+    # ref. is in this list now. It was not, which is how the tool surface came
+    # to read ref.source_document directly for four workstreams: the whitelist
+    # carved out an exception, the forbidden list never mentioned ref, and every
+    # connection ran as the developer so nothing refused it. Real isolation
+    # broke the tool the moment it was enabled. Any base-table schema belongs
+    # here, not just the ones that felt like evidence at the time.
     forbidden = ("core.task", "core.exposure_estimate", "core.adoption_observation",
                  "core.extracted_claim", "core.industry_metric", "score.",
+                 "ref.source_document", "ref.occupation", "ref.naics_sector",
                  "audit.AgentAuditLog", "run_source_binding")
     offenders = [(f, s[:70]) for s in sql for f in forbidden if f in s]
     assert not offenders, f"tool SQL touches base tables: {offenders}"
@@ -606,3 +628,40 @@ def test_a_genuine_absence_still_reads_as_an_absence(tools_db):
 
     assert result.row_count == 0
     assert "No published benchmark for this occupation" in result.note
+
+
+def test_every_allowed_object_is_a_view_not_a_base_table():
+    """The whitelist may only name views.
+
+    ALLOWED_VIEWS is the scope control, and it previously contained
+    ref.source_document -- a base table. That contradicted the grants, which
+    deny db_fde_ro all of SCHEMA::ref, and the contradiction was invisible
+    while every connection ran as the developer. Naming the rule explicitly is
+    cheaper than rediscovering it the next time isolation is switched on.
+    """
+    offenders = [obj for obj in ALLOWED_VIEWS
+                 if not obj.split(".")[-1].startswith("VW_")]
+    assert not offenders, (
+        f"ALLOWED_VIEWS names non-view object(s): {offenders}. The agent reads "
+        f"flat views and is denied every base table; a sixth published object "
+        f"must be a view, not an exception carved into a table.")
+
+
+def test_the_allowed_set_matches_the_granted_set():
+    """The whitelist and the grants must not be able to drift apart.
+
+    Whichever is wrong, disagreement between them is only discoverable by
+    enabling real isolation and watching a tool fail -- which is how this was
+    found.
+    """
+    from pathlib import Path
+
+    grants = Path("sql/04_roles_and_permissions.sql").read_text(encoding="utf-8")
+    granted = {line.split(" ON ")[1].split(" TO ")[0].strip()
+               for line in grants.splitlines()
+               if line.startswith("GRANT SELECT ON dbo.VW_")
+               and "db_fde_ro" in line}
+
+    assert granted == set(ALLOWED_VIEWS), (
+        f"granted but not whitelisted: {granted - set(ALLOWED_VIEWS)}; "
+        f"whitelisted but not granted: {set(ALLOWED_VIEWS) - granted}")

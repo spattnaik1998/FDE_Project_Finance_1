@@ -1029,3 +1029,113 @@ version of the file.
 board. It is the column default on all 29 documents, most of which were fetched
 directly from BEA, Census, O*NET, NBER or arXiv. Only `is_mirror = 1` marked a
 real mirror, and only two rows carried it.
+
+---
+
+## Mirror verification and the security layer (2026-09-22)
+
+Three things, all prompted by auditing my own runbook before handing it over.
+
+**Mirrors verified by digest, not by sampling.** Both Felten AIOE files are
+byte-identical to the authors' own distribution at `github.com/AIOE-Data/AIOE`,
+whose README carries the Felten/Raj/Seamans citation and their institutional
+contacts. The authorship check is load-bearing: one GitHub URL is not
+automatically better than another. Recorded in `audit.source_verification` as an
+event with time, method, counterpart URL and outcome — not written back onto
+`ref.source_document`, which is immutable by design, and not expressible as a
+boolean because a publisher revision must be able to sit in the record beside
+the check it invalidates. `db_fde_score` gets `SELECT` only, so the reporting
+side cannot clear its own blocker. `customer_deliverable` is now **True**.
+
+**Three real weaknesses in my own scripts.** `.env` inherited
+`BUILTIN\Users FullControl`, so every local account could read all six API keys
+— and `enable_sql_auth.ps1` was about to append four database passwords to it.
+Gitignoring a secrets file and controlling who can open it are different
+controls for different threats; only the first was in place. The script also
+passed the passwords as `sqlcmd -v` arguments, and a command line is not a
+secret on Windows — confirmed by reading another process's, not assumed. And
+`-ExecutionPolicy Bypass` was unnecessary, since `CurrentUser` is already
+`RemoteSigned` and the files carry no mark-of-the-web. All three fixed;
+`harden_secrets.ps1` added and `enable_sql_auth.ps1` now refuses to run while a
+broad Allow entry remains.
+
+**`audit.security_event`** records privilege changes with an actor and
+before/after state, denied to all four application principals: only a sysadmin
+can make such a change, so an application able to write its own security
+history would not be audited. A CHECK rejects `PASSWORD=` and `sk-` shapes,
+because a secret in an audit table is a new exposure rather than a control.
+
+`docs/security_and_governance.md` states the trust boundaries, the four
+principals and what each is denied, the five append-only logs, secrets
+handling, the perimeter, and the open items — each marked as enforced or as not
+yet proven.
+
+**A leak found during the rotation itself.** BLS echoes the submitted key back
+inside its own error message and the adapter logged it verbatim, so the first
+use of a freshly rotated key printed it to the console. `config.redact()` now
+masks configured credentials (longest first) plus credential shapes, in both the
+log and the exception. `scripts/rotate_keys.py` reads with `getpass` and writes
+**in place**, because the temp-file-and-rename pattern several editors use
+produces a new file that inherits the folder ACL — measured: 1 explicit ACE back
+to 4 inherited.
+
+---
+
+## Privilege isolation enabled and proven (2026-09-23)
+
+700 tests pass, 2 skip with stated reasons; two consecutive full-suite runs. Full stack 12 pass, 0 fail.
+
+Mixed-mode auth is on, the four logins exist in the correct roles, and the
+claim the TDD has made since day one is now demonstrated rather than designed:
+
+```
+PASS  connect as USR_FDE_RO             login=USR_FDE_RO
+PASS  agent cannot read a base table    refused as designed
+29/29 privilege assertions passing      (previously 29 skipped)
+17/17 guardrails verified
+```
+
+Skips fell from 30 to 2, and both remaining ones are correct: one test only runs
+while calibration is unidentifiable (it no longer is), the other only while
+mixed-mode auth is unavailable (it no longer is).
+
+**Enabling enforcement found three defects that were invisible under the
+developer fallback.** This is the entry worth keeping, because each had been
+passing for workstreams.
+
+1. **The passwords were written where nothing looked for them.**
+   `session.py._password_for` read `os.environ` only, commented "never read from
+   a file", while `enable_sql_auth.ps1` writes them to `.env` — the only place it
+   can persist them. Mixed mode was on, the logins existed, and every connection
+   still fell back to the developer credential *silently*. The stated reasoning
+   was also backwards: an environment variable is inherited by every child
+   process and readable from a process listing, while `.env` is ACL-restricted.
+   The file is the narrower store. Precedence now matches `config.resolve_key`.
+
+2. **The agent was reading a base table.** `ALLOWED_VIEWS` carved out
+   `ref.source_document` as "reference metadata, not evidence" while `sql/04`
+   denies `db_fde_ro` all of `SCHEMA::ref`. Both were satisfied vacuously while
+   every connection ran as the developer; real isolation broke
+   `get_source_document` immediately. Fixed with `dbo.VW_SOURCE_DOCUMENT` — a
+   sixth view, so the exception disappears rather than being granted. The `ast`
+   test that should have caught it listed `core.*`, `score.*` and `audit.*` but
+   never `ref.`; it does now, plus a test that every whitelisted object is a
+   view and a test that the whitelist equals the granted set.
+
+3. **The test database had no users.** `sql/06` does
+   `USE FDE_TaskExposure`, so only production got them — 26 failures and 44
+   errors, all "Cannot open database FDE_TaskExposure_Test". `conftest` now maps
+   the logins into the test database and adds them to the same roles,
+   conditionally, so the suite still runs with auth off.
+
+**And one the new view exposed.** The `views_expose_provenance` quality
+assertion was `SELECT 5 - COUNT(...)`. A sixth view made it return -1 and fail
+spuriously — but the worse case was the other direction: a sixth view *without*
+`Source_Doc_ID` would have left the count at 5 and the assertion would have
+passed, missing exactly what it exists to detect. Now counts views that lack the
+column, which scales and cannot false-pass. An assertion that hardcodes how many
+objects it expects has stopped being an assertion about the property.
+
+The honest reading: enabling isolation did not tick a box, it established that
+two of the architecture's stated guarantees were not in force. Better found now
+than in front of a client.
