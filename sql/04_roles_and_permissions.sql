@@ -55,7 +55,42 @@ GRANT SELECT, INSERT ON SCHEMA::ref  TO db_fde_load;
 GRANT SELECT, INSERT ON SCHEMA::core TO db_fde_load;
 GRANT SELECT          ON SCHEMA::score TO db_fde_load;
 
-DENY UPDATE, DELETE ON SCHEMA::core TO db_fde_load;
+/* DELETE stays denied schema-wide. UPDATE is NOT denied here, deliberately --
+   see the column grants below. In SQL Server a table-level DENY overrides a
+   column-level GRANT, so keeping `DENY UPDATE ON SCHEMA::core` would make the
+   currency grant dead letter. Tested rather than assumed: with the DENY in
+   place the demote path was still refused.
+
+   Dropping the DENY does not widen anything. Permission requires a grant, and
+   db_fde_load is granted only SELECT and INSERT on this schema, so the only
+   UPDATE it can perform is the one explicitly granted per column below. */
+DENY DELETE ON SCHEMA::core TO db_fde_load;
+
+/* One column-level exception, and only one.
+
+   The append-only model says a revised artefact becomes a NEW source_doc_id
+   with new rows, and the prior rows are DEMOTED rather than deleted so that
+   VW_* shows the latest version while history stays resolvable for a past run.
+   Demotion is written by warehouse.loaders._demote_superseded, which issues an
+   UPDATE on core -- and the blanket DENY above forbids it.
+
+   That contradiction was invisible until privilege isolation was enabled: under
+   the developer fallback the loader could update anything, so the demote path
+   worked and nobody learned it was ungranted. Enforced, it fails, and the
+   versioning mechanism the whole persistence design rests on stops working.
+
+   Resolved with a column-level grant rather than by relaxing the DENY. The
+   architecture review's intent was that the loader cannot REWRITE A FACT --
+   not that it cannot mark one superseded. UPDATE(is_current) preserves that
+   exactly: the loader may flip a currency flag and cannot touch a quote, a
+   value, a page number or a digest. A DENY on the table would override a
+   column GRANT in SQL Server, so the DENY above is deliberately scoped to
+   UPDATE and DELETE at table level while currency is granted per column. */
+GRANT UPDATE (is_current) ON core.task                 TO db_fde_load;
+GRANT UPDATE (is_current) ON core.exposure_estimate    TO db_fde_load;
+GRANT UPDATE (is_current) ON core.adoption_observation TO db_fde_load;
+GRANT UPDATE (is_current) ON core.extracted_claim      TO db_fde_load;
+GRANT UPDATE (is_current) ON core.industry_metric      TO db_fde_load;
 DENY UPDATE, DELETE ON ref.source_document TO db_fde_load;   -- immutable snapshots
 DENY DELETE ON SCHEMA::ref TO db_fde_load;
 GRANT UPDATE ON ref.occupation    TO db_fde_load;            -- temporal: history retained

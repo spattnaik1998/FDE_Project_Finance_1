@@ -33,10 +33,14 @@ if str(_SRC) not in sys.path:
 import streamlit as st
 
 from app import blocks as blocks_module
-from app.gateway import NoRunAvailable, available_runs, load_view
+from app.contract import RefusalReason, RunCost, RunRequest
+from app.gateway import (NoRunAvailable, available_runs, in_scope_occupations,
+                         load_view, submit)
 from app.view_model import ReportView
 
 PAGE_TITLE = "Task Exposure & Adoption Lag"
+DEFAULT_QUESTION = ("Which of our equity research associate cost lines are "
+                    "exposed to agent substitution, and on what timetable?")
 TONE_RENDERER = {"ok": "success", "warn": "warning", "stop": "error"}
 
 
@@ -76,6 +80,25 @@ def render_block(block: blocks_module.Block) -> None:
         with st.expander(meta.get("label", "Details")):
             for inner in payload:
                 render_block(inner)
+    elif kind == "request_form":
+        # The request half of the TDD 1.1 contract. Collects a question and
+        # nothing else; scope resolution belongs to the Intent & Scope node.
+        with st.form("run_request", clear_on_submit=False):
+            question = st.text_area(payload["label"],
+                                    value=payload["default_question"],
+                                    height=90, max_chars=500)
+            confirm = st.checkbox(
+                "I understand this issues model calls and will block",
+                value=False)
+            submitted = st.form_submit_button(payload["submit_label"],
+                                              type="primary")
+        if submitted:
+            if not confirm:
+                st.warning("Tick the confirmation before running. A button that "
+                           "quietly spends model calls is not one to trust.")
+            else:
+                st.session_state["pending_request"] = question
+                st.rerun()
     elif kind == "download":
         st.download_button(meta.get("label", "Download"), payload,
                            file_name=meta.get("file_name", "report.md"),
@@ -109,10 +132,59 @@ def sidebar_run_id() -> str | None:
     return labels[choice]
 
 
+def _run_pending_request() -> str | None:
+    """Submit a queued request through the gateway. Returns a run id, or None.
+
+    The UI builds a typed RunRequest and calls the gateway; it does not touch
+    the orchestration package, hold a credential, or interpret anything beyond
+    the typed result it gets back. That is what keeps the tier boundary real
+    while still satisfying the request arrow the architecture draws.
+    """
+    question = st.session_state.pop("pending_request", None)
+    if not question:
+        return None
+
+    try:
+        request = RunRequest(question=question)
+    except Exception as exc:                     # noqa: BLE001 - surfaced
+        st.error(f"That request was not accepted: {exc}")
+        return None
+
+    cost = RunCost()
+    with st.spinner(f"Running the analysis — about {cost.calls} model calls, "
+                    f"{cost.duration_text}. Do not close this tab."):
+        result = submit(request)
+
+    st.session_state["last_result"] = result.model_dump()
+    if result.produced_a_verdict:
+        st.success(f"Run complete: {result.status} · {result.calls} calls · "
+                   f"{result.tokens:,} tokens")
+        return result.run_id
+
+    for block in blocks_module.refusal_blocks(
+            RefusalReason(**result.refusal.model_dump())):
+        render_block(block)
+    return None
+
+
 def main() -> None:
     st.set_page_config(page_title=PAGE_TITLE, layout="wide")
+
+    fresh_run_id = _run_pending_request()
+
+    # The request form sits above the report: the customer's own question is
+    # the entry point, and the rendered run is the answer to it.
     try:
-        view = load_view(sidebar_run_id())
+        occupations = in_scope_occupations()
+    except Exception:                            # noqa: BLE001 - degrade
+        occupations = []
+    if occupations:
+        for block in blocks_module.request_form_blocks(
+                occupations, DEFAULT_QUESTION, RunCost()):
+            render_block(block)
+
+    try:
+        view = load_view(fresh_run_id or sidebar_run_id())
     except NoRunAvailable as exc:
         st.title(PAGE_TITLE)
         st.info(str(exc))
@@ -124,8 +196,14 @@ def main() -> None:
     render_page(view)
 
 
+# Streamlit executes the script with __name__ == "__main__" -- verified against
+# the running version rather than assumed. An earlier `else: main()` branch
+# claimed otherwise, which meant importing this module for a single constant
+# executed the whole app. Harmless while main() only emitted no-ops outside a
+# Streamlit context; the moment it created a form, the dangling form context
+# broke the next AppTest with "Forms cannot be nested in other forms."
+#
+# Importing this module must have no side effects. A test that reads a constant
+# from here should not run an application.
 if __name__ == "__main__":
-    main()
-else:
-    # Streamlit imports the script rather than running it under __main__.
     main()

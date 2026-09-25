@@ -138,9 +138,31 @@ def test_the_ui_module_cannot_reach_the_database():
 
 
 def test_the_ui_module_contains_no_sql():
-    source = _source(UI_MODULE).upper()
-    found = [keyword for keyword in SQL_KEYWORDS if keyword in source]
-    assert not found, f"SQL keywords in the presentation tier: {found}"
+    """Looks for SQL, not for English words that appear in SQL.
+
+    The first version scanned the whole file for bare keywords and failed on a
+    comment containing the word "from". That is the same defect W4 hit, where a
+    structural test matched a module docstring because the prose contained
+    "FROM " -- so the rule there became "require SELECT and FROM together".
+    Applying it here too: real SQL lives in a string literal and names both.
+
+    Parsed with ast so comments are out of scope entirely; a comment cannot
+    execute a query.
+    """
+    tree = ast.parse(_source(UI_MODULE))
+    literals = [n.value for n in ast.walk(tree)
+                if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+
+    offenders = [text[:60] for text in literals
+                 if "SELECT" in text.upper() and "FROM" in text.upper()]
+    assert not offenders, f"SQL in the presentation tier: {offenders}"
+
+    # And no DML verb in a literal, which needs no FROM to do damage.
+    dml = [text[:60] for text in literals
+           if any(verb in text.upper()
+                  for verb in ("INSERT INTO", "UPDATE ", "DELETE FROM",
+                               "DROP ", "ALTER "))]
+    assert not dml, f"DML in the presentation tier: {dml}"
 
 
 def test_the_blocks_and_view_model_are_also_database_free():
@@ -177,12 +199,35 @@ def test_the_ui_does_not_score_or_call_a_model():
             f"must not recompute it")
 
 
-def test_the_gateway_does_not_score_either():
-    """The facade reads a persisted run; it never produces one."""
+def test_rendering_a_run_does_not_recompute_it():
+    """Scoped to load_view, which is the path that renders.
+
+    This test used to forbid the whole gateway module from naming
+    runner.invoke. That premise expired: TDD 1.1 draws a typed request from the
+    presentation tier into orchestration, so submit() must invoke the graph.
+    What still has to hold is the original intent -- opening a page and
+    rendering a persisted run cannot recompute it -- so the assertion now
+    covers load_view's body rather than the file.
+    """
     source = _source(GATEWAY_MODULE)
-    for banned in ("build_verdict", "runner.invoke", "for_stage",
-                   "persist_verdict", "open_run", "close_run"):
-        assert banned not in source, f"gateway references {banned!r}"
+    start = source.index("def load_view")
+    end = source.index("def _standing")
+    body = source[start:end]
+
+    for banned in ("build_verdict", "runner.invoke", "graph_runner.invoke",
+                   "for_stage", "persist_verdict", "open_run", "close_run"):
+        assert banned not in body, (
+            f"load_view references {banned!r}; rendering a persisted run must "
+            f"not recompute it")
+
+
+def test_scoring_is_confined_to_submit():
+    """Only the explicit request path may invoke orchestration."""
+    source = _source(GATEWAY_MODULE)
+    start = source.index("def submit")
+    assert "graph_runner.invoke" in source[start:], (
+        "submit() is the request half of the tier contract and must invoke "
+        "the graph")
 
 
 # ===========================================================================
@@ -556,13 +601,27 @@ def test_the_app_runs_without_raising(executed_app):
     assert len(executed_app.error) == 0, [e.value for e in executed_app.error]
 
 
-def test_the_app_renders_all_eight_sections(executed_app):
+def test_the_app_renders_all_eight_report_sections(executed_app):
+    """The eight report sections, plus the request form above them.
+
+    Asserted by membership rather than by count: the request form adds a ninth
+    subheader, and a test pinned to "exactly eight" would fail on a deliberate
+    addition while saying nothing about whether the report is complete.
+    """
     headings = [s.value for s in executed_app.subheader]
     for expected in ("1. Standing", "2. Exposure", "3. Adoption lag",
                      "4. Calibration", "5. Direction", "6. Per-task detail",
                      "7. Limitations", "8. Provenance"):
         assert any(h.startswith(expected) for h in headings), (
             f"{expected} did not render; got {headings}")
+
+
+def test_the_app_offers_the_request_form_above_the_report(executed_app):
+    """The customer's own question is the entry point, so it comes first."""
+    headings = [s.value for s in executed_app.subheader]
+    assert "Run a new analysis" in headings
+    assert headings.index("Run a new analysis") < next(
+        i for i, h in enumerate(headings) if h.startswith("1. Standing"))
 
 
 def test_the_app_renders_the_headline_metrics(executed_app):
@@ -597,3 +656,180 @@ def test_the_app_does_not_render_our_percentile_when_unidentifiable(
     labels = [m.label for m in executed_app.metric]
     assert "Our percentile" not in labels
     assert "Delta" not in labels
+
+
+# ===========================================================================
+# The request half of the tier contract (TDD 1.1)
+# ===========================================================================
+#
+# The architecture draws "typed request / RoleVerdict response" between the
+# presentation and orchestration tiers. Only the response direction existed:
+# the UI rendered persisted runs and a CLI script drove the graph, so the
+# presentation tier could not initiate anything. These cover the missing half
+# and, more importantly, that adding it did not breach the boundary it crosses.
+
+def test_a_request_carries_a_question_not_a_soc_code():
+    """The UI must not pre-resolve scope.
+
+    If the request could name the occupation, the Intent & Scope node's
+    verification against the published catalogue would be bypassed -- and a
+    confident answer about the wrong role is the worst failure available here.
+    """
+    from app.contract import RunRequest
+
+    assert "soc_code" not in RunRequest.model_fields
+    assert "occupation" not in RunRequest.model_fields
+    assert set(RunRequest.model_fields) == {"question", "is_customer_deliverable"}
+
+
+@pytest.mark.parametrize("statement", [
+    "SELECT * FROM core.task",
+    "drop table score.run",
+    "exposure; -- comment",
+    "a UNION ALL b",
+])
+def test_a_request_refuses_a_statement(statement):
+    """A request is a question. The UI has no business sending SQL."""
+    from app.contract import RunRequest
+
+    with pytest.raises(Exception):
+        RunRequest(question=statement + " and what is the exposure?")
+
+
+def test_a_request_refuses_an_empty_or_enormous_question():
+    from app.contract import RunRequest
+
+    with pytest.raises(Exception):
+        RunRequest(question="short")
+    with pytest.raises(Exception):
+        RunRequest(question="x" * 5000)
+
+
+def test_the_request_is_immutable_once_built():
+    """A request that the UI can mutate after validation is not a contract."""
+    from app.contract import RunRequest
+
+    request = RunRequest(question="Which cost lines are exposed to agents?")
+    with pytest.raises(Exception):
+        request.question = "something else"
+
+
+def test_a_submission_result_carries_values_not_handles():
+    """The response must not let the UI reach the warehouse or a provider."""
+    from app.contract import SubmissionResult
+
+    result = SubmissionResult(accepted=True, run_id="abc", status="passed")
+    for value in result.model_dump().values():
+        assert value is None or isinstance(
+            value, (str, int, bool, float, dict, list, tuple)), (
+            f"{value!r} is not a plain value")
+
+
+def test_a_refusal_is_a_first_class_outcome_not_an_exception():
+    """"Not published" is a correct answer to a reasonable question."""
+    from app.contract import RefusalReason, SubmissionResult
+
+    refused = SubmissionResult(
+        accepted=False,
+        refusal=RefusalReason(code="out_of_scope", message="Not published.",
+                              in_scope_hint=("Credit Analysts (13-2041.00)",)))
+
+    assert not refused.produced_a_verdict
+    assert refused.run_id is None
+    assert refused.refusal.in_scope_hint
+
+
+def test_the_ui_still_cannot_reach_the_database_after_adding_the_request_path():
+    """The whole point: the new capability must not breach the boundary.
+
+    The UI may import app.gateway and app.contract. It may not import the
+    orchestration or persistence packages, which is what would make the
+    presentation tier a place where reasoning or querying happens.
+    """
+    tree = ast.parse(_source(UI_MODULE))
+    imported: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported += [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.append(node.module)
+
+    for banned in ("graph", "graph.runner", "nodes", "scoring", "providers",
+                   "warehouse", "pyodbc", "report"):
+        assert not any(i == banned or i.startswith(banned + ".")
+                       for i in imported), (
+            f"the presentation tier imports {banned}; it must go through "
+            f"app.gateway")
+
+
+def test_the_gateway_is_where_orchestration_is_invoked():
+    """The application tier drives the graph; it is the tier that may."""
+    source = _source(GATEWAY_MODULE)
+    assert "graph_runner.invoke" in source or "runner.invoke" in source
+    assert "def submit" in source
+
+
+def test_the_request_form_renders_without_arithmetic():
+    """The cost figures must arrive pre-formatted.
+
+    blocks.py is forbidden from computing, so the run duration is a string on
+    the contract rather than seconds divided in the view. Formatting it upstream
+    keeps the rule intact instead of carving an exception into it.
+    """
+    from app.contract import RunCost
+    from app.blocks import request_form_blocks
+
+    occupations = [{"soc_code": "13-2051.00", "title": "Analysts", "tasks": 26}]
+    page = request_form_blocks(occupations, "Which cost lines?", RunCost())
+
+    kinds = [b.kind for b in page]
+    assert "request_form" in kinds
+    assert "callout" in kinds                      # the cost warning
+    text = " ".join(displayed_strings(page))
+    assert "model calls" in text
+    assert "13-2051.00" in text                    # in-scope list is shown
+
+
+def test_the_in_scope_list_is_shown_before_a_run_is_offered():
+    """A form that mostly answers "out of scope" teaches nothing.
+
+    A refusal still costs a model call, so the covered occupations are visible
+    up front rather than discovered by paying for a rejection.
+    """
+    from app.contract import RunCost
+    from app.blocks import request_form_blocks
+
+    occupations = [{"soc_code": "13-2041.00", "title": "Credit Analysts",
+                    "tasks": 11}]
+    page = request_form_blocks(occupations, "q", RunCost())
+    labels = [b.meta.get("label", "") for b in page if b.kind == "expander"]
+    assert any("In scope" in label for label in labels)
+
+
+def test_a_refusal_renders_as_an_answer_not_a_crash():
+    from app.blocks import refusal_blocks
+    from app.contract import RefusalReason
+
+    page = refusal_blocks(RefusalReason(
+        code="out_of_scope", message="Not published.",
+        in_scope_hint=("Credit Analysts (13-2041.00)",)))
+
+    tones = [b.meta.get("tone") for b in page if b.kind == "callout"]
+    assert "warn" in tones, "a correct refusal is a warning, not an error"
+    text = " ".join(displayed_strings(page))
+    assert "Credit Analysts" in text
+
+
+def test_every_block_kind_the_form_emits_has_a_renderer():
+    from app.contract import RunCost
+    from app.blocks import request_form_blocks, refusal_blocks
+    from app.contract import RefusalReason
+
+    emitted = {b.kind for b in request_form_blocks(
+        [{"soc_code": "x", "title": "y", "tasks": 1}], "q", RunCost())}
+    emitted |= {b.kind for b in refusal_blocks(
+        RefusalReason(code="c", message="m"))}
+
+    dispatcher = _source(UI_MODULE)
+    missing = [k for k in emitted if f'== "{k}"' not in dispatcher]
+    assert not missing, f"no renderer for: {missing}"

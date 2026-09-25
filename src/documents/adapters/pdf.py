@@ -91,6 +91,66 @@ def _sentences(text: str) -> list[str]:
     return [s.strip() for s in SENTENCE_END.split(flat) if s.strip()]
 
 
+# The extractor decides which sentences become claims, so it is part of a
+# claim's identity. Without it, correcting the extractor produces rows whose
+# claim_id collides with the old derivation while carrying different text --
+# the primary key says "same claim", the quote says otherwise. Bumping this
+# makes a re-derivation a new set of rows and leaves the old ones resolvable
+# for any run that consumed them.
+#
+# v2 added the front-matter filter below.
+CLAIM_EXTRACTOR_VERSION = "v2"
+
+
+# Front matter is not evidence.
+#
+# A paper's opening pages carry dedications, acknowledgements, JEL code blocks,
+# abstract headers and author affiliations. Those sentences pass every filter
+# this extractor had -- they are the right length, they contain the topic term,
+# and they read as prose -- so two of them reached the customer-facing
+# provenance appendix as cited evidence:
+#
+#   "We dedicate this paper to the memory of Shinkyu Yang, whose pioneering
+#    insights on the role of intangibles inspired us."
+#   "D2,E01,E22,O3 ABSTRACT General purpose technologies (GPTs) such as AI..."
+#
+# The first matched `intangible_complement` because it contains "intangibles".
+# Neither is a claim about anything. Rejecting by pattern is cheap; the risk is
+# rejecting a real claim, so each pattern is narrow and named, and
+# tests/test_documents.py asserts a legitimate claim survives all of them.
+FRONT_MATTER_PATTERNS = (
+    # Dedications and acknowledgements.
+    (re.compile(r"\b(we dedicate|dedicated to the memory|in memory of)\b", re.I),
+     "dedication"),
+    (re.compile(r"\b(we (are grateful|thank)|acknowledges? (helpful|financial)"
+                r"|gratefully acknowledge)\b", re.I),
+     "acknowledgement"),
+    # A JEL classification block: two or more codes like D2, E01, O3.
+    (re.compile(r"\b[A-Z]\d{1,2}\s*,\s*[A-Z]\d{1,2}"),
+     "jel_codes"),
+    # Structural headers bleeding into the sentence stream.
+    (re.compile(r"\bABSTRACT\b"), "abstract_header"),
+    (re.compile(r"\bNBER WORKING PAPER SERIES\b", re.I), "series_header"),
+    (re.compile(r"\bWorking Paper\s+(No\.?\s*)?\d+", re.I),
+     "paper_number"),
+    # Journal and publication furniture.
+    (re.compile(r"\b(all rights reserved)\b|©", re.I), "copyright"),
+)
+
+
+def front_matter_reason(sentence: str) -> str | None:
+    """Name why a sentence is front matter, or None if it is prose.
+
+    Returns the reason rather than a bool so the rejection can be logged with
+    its cause. A filter that drops text silently is one nobody can audit when a
+    claim goes missing.
+    """
+    for pattern, reason in FRONT_MATTER_PATTERNS:
+        if pattern.search(sentence):
+            return reason
+    return None
+
+
 def find_claims(path: str | Path, topics: list[ClaimTopic], source_doc_id: str,
                 max_per_topic: int = 3,
                 max_pages: int | None = None) -> list[ExtractedClaim]:
@@ -125,13 +185,20 @@ def find_claims(path: str | Path, topics: list[ClaimTopic], source_doc_id: str,
                                 page_no)
                     continue
 
+                front_matter = front_matter_reason(sentence)
+                if front_matter:
+                    LOG.warning("source=pdf status=quote_rejected reason=%s "
+                                "page=%s topic=%s", front_matter, page_no,
+                                topic.topic)
+                    continue
+
                 key = lowered[:120]
                 if key in seen:
                     continue
                 seen.add(key)
 
                 claims.append(ExtractedClaim(
-                    claim_id=f"{source_doc_id}:{topic.topic}:{page_no}:{found}",
+                    claim_id=f"{source_doc_id}:{topic.topic}:{page_no}:{found}:{CLAIM_EXTRACTOR_VERSION}",
                     topic=topic.topic,
                     quote=sentence,
                     page=page_no,

@@ -83,7 +83,7 @@ touches a base table.
 │                                                                      │
 │  Agent-visible:   VW_ROLE_TASKS · VW_EXPOSURE_BENCHMARK              │
 │                   VW_ADOPTION_CURVE · VW_CLAIM_EVIDENCE              │
-│                   VW_INDUSTRY_METRIC                                 │
+│                   VW_INDUSTRY_METRIC · VW_SOURCE_DOCUMENT            │
 │  Agent-invisible: ref.* core.* score.* audit.*  (base tables)        │
 │                                                                      │
 │  Ingestion (offline, separate credential):                           │
@@ -104,6 +104,15 @@ specifies the warehouse, orchestration, security and delivery tiers.
   Tier. Renders no figure it did not receive in a typed response, so the UI
   cannot become a source of numbers.
 
+  The typed request drawn in 1.1 is `app.contract.RunRequest`, and the typed
+  response is `SubmissionResult` followed by a `ReportView`. The request carries
+  a question and nothing else — deliberately **no** `soc_code` field, because
+  resolving free text to an occupation is the Intent & Scope node's job and a UI
+  that pre-resolved it would bypass that node's verification against the
+  published catalogue. `app.gateway.submit` is the only place orchestration is
+  invoked; the UI imports neither the graph nor the warehouse, which
+  `tests/test_app.py` enforces by parsing the module.
+
 - **Orchestration Engine:** A LangGraph state machine. This component manages
   the execution lifecycle — scope validation, evidence retrieval, per-task
   semantic classification, invocation of the deterministic scoring service, and
@@ -121,6 +130,15 @@ specifies the warehouse, orchestration, security and delivery tiers.
   the LLM/agent from the raw underlying data by exposing only flat, read-only
   database views accessed through a read-only role wrapper. Ingestion writes to
   base tables under a separate credential the agent runtime does not possess.
+
+  **Six views, not five.** `VW_SOURCE_DOCUMENT` was added on 2026-09-23 when
+  privilege isolation was enabled for the first time. The tool surface had been
+  whitelisting `ref.source_document` — a base table — as an exception for
+  citation metadata, while `sql/04` denies `db_fde_ro` all of `SCHEMA::ref`.
+  Both were satisfied vacuously while every connection ran as the developer, and
+  `get_source_document` broke the moment the credential was enforced. A sixth
+  view is the faithful reading of "the agent never touches a base table": the
+  exception disappears rather than being granted.
 
 ---
 

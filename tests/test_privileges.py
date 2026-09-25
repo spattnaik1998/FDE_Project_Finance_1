@@ -30,6 +30,16 @@ needs = {p: pytest.mark.skipif(
     for p in ISOLATED}
 
 
+def _fetch(principal: Principal, sql: str, *params):
+    """Read rows as a principal, for assertions about the catalogue itself."""
+    with connect(principal, database=PRODUCTION_DB, autocommit=False) as conn:
+        cursor = conn.cursor()
+        cursor.execute(sql, *params)
+        rows = cursor.fetchall()
+        conn.rollback()
+    return rows
+
+
 def _execute(principal: Principal, sql: str, *params):
     with connect(principal, database=PRODUCTION_DB, autocommit=False) as conn:
         cursor = conn.cursor()
@@ -202,3 +212,63 @@ def test_no_principal_can_do_another_principals_job():
     with pytest.raises(pyodbc.Error):
         _execute(Principal.SCORE,
                  "INSERT INTO audit.AgentAuditLog (node_invoked) VALUES ('x')")
+
+
+# --- Currency may be demoted; a fact may never be rewritten -----------------
+
+@needs[Principal.LOAD]
+def test_loader_can_demote_a_superseded_row():
+    """The append-only versioning mechanism has to actually work.
+
+    A revised artefact becomes a new source_doc_id and the prior rows are
+    demoted rather than deleted, so VW_* shows the latest version while history
+    stays resolvable. That demote is an UPDATE, and a blanket
+    DENY UPDATE ON SCHEMA::core forbade it -- invisible until privilege
+    isolation was enabled, because the developer fallback could update anything.
+    """
+    _execute(Principal.LOAD, "UPDATE core.task SET is_current = 1 WHERE 1 = 0")
+
+
+@needs[Principal.LOAD]
+@pytest.mark.parametrize("sql", [
+    "UPDATE core.task SET statement = 'rewritten' WHERE 1 = 0",
+    "UPDATE core.extracted_claim SET quote = 'rewritten' WHERE 1 = 0",
+    "UPDATE core.extracted_claim SET page = 999 WHERE 1 = 0",
+    "UPDATE core.exposure_estimate SET value = 0 WHERE 1 = 0",
+    "UPDATE core.adoption_observation SET value = 0 WHERE 1 = 0",
+])
+def test_loader_cannot_rewrite_a_fact(sql):
+    """Demotion is not revision.
+
+    The column grant is UPDATE(is_current) and nothing else, so the loader can
+    mark a row superseded but cannot change what it says. That was the
+    architecture review's intent when USR_FDE_LOAD "lost UPDATE"; a schema-wide
+    DENY expressed it in a way that also broke demotion.
+    """
+    with pytest.raises(pyodbc.Error):
+        _execute(Principal.LOAD, sql)
+
+
+@needs[Principal.LOAD]
+def test_the_currency_grant_is_column_scoped_not_table_scoped():
+    """Asserted against the catalogue, not inferred from behaviour.
+
+    A future edit could grant UPDATE on the whole table and every test above
+    would still pass while the guarantee was gone.
+    """
+    rows = _fetch(Principal.LOAD, """
+        SELECT p.permission_name, c.name AS column_name
+        FROM sys.database_permissions p
+        JOIN sys.database_principals dp ON dp.principal_id = p.grantee_principal_id
+        LEFT JOIN sys.columns c ON c.object_id = p.major_id
+                               AND c.column_id = p.minor_id
+        WHERE dp.name = 'db_fde_load'
+          AND p.permission_name = 'UPDATE'
+          AND p.state_desc = 'GRANT'
+          AND p.major_id = OBJECT_ID('core.task')""")
+
+    assert rows, "no UPDATE grant found on core.task for db_fde_load"
+    for permission, column in rows:
+        assert column == "is_current", (
+            f"UPDATE granted on column {column!r}; only is_current may be "
+            f"writable, or demotion becomes a licence to rewrite facts")

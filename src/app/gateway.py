@@ -190,3 +190,105 @@ def _to_view(data: ReportData, registry, trace, markdown: str) -> ReportView:
         figures=_figure_literals(registry),
         markdown=markdown,
     )
+
+
+# ---------------------------------------------------------------------------
+# The request half of the tier contract
+# ---------------------------------------------------------------------------
+#
+# TDD 1.1 draws a typed request from the presentation tier into orchestration.
+# Only the response direction existed until now: the UI rendered persisted runs
+# and a CLI script drove the graph. This is the missing half.
+#
+# It lives in the gateway rather than in the UI for the same reason load_view
+# does -- this is the application tier, which legitimately holds credentials and
+# may import the orchestration package. The UI calls submit() and receives plain
+# values, so it still holds no handle and computes nothing.
+
+def in_scope_occupations(*, database: str | None = None) -> list[dict]:
+    """Occupations the warehouse actually publishes, for the request form.
+
+    A form that mostly returns "out of scope" is a poor way to learn what the
+    system covers, so the UI shows the answer up front rather than making the
+    customer guess and pay for a refusal.
+    """
+    from warehouse.session import Principal, connect
+
+    with connect(Principal.SCORE, database=database) as conn:
+        rows = conn.cursor().execute("""
+            SELECT o.soc_code, o.title, COUNT(*) AS tasks
+            FROM core.task t
+            JOIN ref.occupation o ON o.soc_code = t.soc_code
+            WHERE t.is_current = 1
+            GROUP BY o.soc_code, o.title
+            ORDER BY o.title""").fetchall()
+    return [{"soc_code": r[0], "title": r[1], "tasks": int(r[2])} for r in rows]
+
+
+def submit(request, *, database: str | None = None) -> "SubmissionResult":
+    """Run one analysis from a typed request and return a typed result.
+
+    Blocking by design. A run is a fixed node set over a known task count, so
+    its cost is predictable and the caller is told it up front; a fire-and-forget
+    submission would hand back a job id and lose the refusal path, which is the
+    outcome most likely to matter.
+
+    Every failure becomes a :class:`RefusalReason` rather than an exception. The
+    presentation tier has no sensible handling for a traceback, and "that
+    occupation is not published" is a correct answer that a customer should read
+    as one.
+    """
+    from app.contract import RefusalReason, SubmissionResult
+    from graph import runner as graph_runner
+    from nodes.state import Phase
+
+    try:
+        outcome = graph_runner.invoke(
+            request.question,
+            deliverable=request.is_customer_deliverable,
+            database=database)
+    except Exception as exc:                        # noqa: BLE001 - surfaced
+        LOG.warning("submit failed status=error error=%s", exc)
+        return SubmissionResult(
+            accepted=False,
+            refusal=RefusalReason(
+                code="orchestration_error",
+                message=(f"The run could not be completed: "
+                         f"{type(exc).__name__}. Nothing was persisted."),
+            ))
+
+    spend = outcome.ledger.summary()
+    state = outcome.state
+
+    if state.phase is Phase.OUT_OF_SCOPE:
+        hint = tuple(f"{o['title']} ({o['soc_code']})"
+                     for o in in_scope_occupations(database=database))
+        return SubmissionResult(
+            accepted=False,
+            refusal=RefusalReason(
+                code="out_of_scope",
+                message=(state.errors[-1] if state.errors else
+                         "The request resolved to an occupation this warehouse "
+                         "does not publish, so no analysis was produced."),
+                in_scope_hint=hint),
+            calls=spend["calls"], tokens=spend["total_tokens"],
+            duration_ms=spend["duration_ms"])
+
+    if state.verdict is None:
+        return SubmissionResult(
+            accepted=False,
+            refusal=RefusalReason(
+                code="no_verdict",
+                message=(f"The run halted at {state.phase.value} without "
+                         f"producing a verdict. "
+                         f"{'; '.join(state.errors) or 'No error was recorded.'}"),
+            ),
+            calls=spend["calls"], tokens=spend["total_tokens"],
+            duration_ms=spend["duration_ms"])
+
+    LOG.info("submit accepted run=%s status=%s calls=%s",
+             outcome.context.run_id, outcome.status, spend["calls"])
+    return SubmissionResult(
+        accepted=True, run_id=outcome.context.run_id, status=outcome.status,
+        calls=spend["calls"], tokens=spend["total_tokens"],
+        duration_ms=spend["duration_ms"])

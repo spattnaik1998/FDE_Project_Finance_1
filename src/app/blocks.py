@@ -23,7 +23,7 @@ from app.view_model import ReportView
 # a programming error and the dispatcher raises rather than silently skipping,
 # because a silently dropped block is a figure the customer never saw.
 KINDS = ("title", "caption", "heading", "markdown", "callout", "metrics",
-         "table", "divider", "expander", "download")
+         "table", "divider", "expander", "download", "request_form")
 
 
 @dataclass(frozen=True)
@@ -44,6 +44,66 @@ def _b(kind, payload=None, **meta) -> Block:
 # ---------------------------------------------------------------------------
 # Sections
 # ---------------------------------------------------------------------------
+
+def request_form_blocks(occupations, default_question: str,
+                        cost) -> list[Block]:
+    """The request half of the tier contract, as blocks.
+
+    TDD 1.1 draws a typed request from the presentation tier into orchestration.
+    This is where the customer supplies it. The form carries a question and
+    nothing else -- no SOC code, no scoring parameters -- because resolving free
+    text to an occupation is the Intent & Scope node's job, and a UI that
+    pre-resolved it would move a model's judgment into the presentation tier.
+
+    The in-scope list is shown up front. A form that mostly answers "out of
+    scope" is a poor way to learn what the system covers, and a refusal still
+    costs a model call.
+    """
+    rows = [[o["title"], o["soc_code"], str(o["tasks"])] for o in occupations]
+    return [
+        _b("heading", "Run a new analysis"),
+        _b("markdown",
+           "Ask in your own words. The orchestration tier resolves the "
+           "occupation itself and **halts rather than substituting a similar "
+           "one** if the warehouse does not publish it."),
+        _b("callout",
+           f"A run issues about **{cost.calls} model calls** and "
+           f"**{cost.tokens:,} tokens**, and takes **{cost.duration_text}**. "
+           f"The page will block until it finishes.",
+           tone="warn"),
+        _b("request_form", {
+            "default_question": default_question,
+            "label": "Which cost lines do you want assessed?",
+            "submit_label": "Run analysis",
+        }),
+        _b("expander", [
+            _b("markdown",
+               "These are the occupations currently loaded. Anything else is "
+               "correctly refused rather than approximated."),
+            _b("table", {"columns": ["Occupation", "SOC", "Tasks"],
+                         "rows": rows}),
+        ], label=f"In scope right now ({len(rows)} occupations)"),
+        _b("divider"),
+    ]
+
+
+def refusal_blocks(refusal) -> list[Block]:
+    """A refusal rendered as an answer, not as an error.
+
+    "That occupation is not published" is a correct response to a reasonable
+    question. Presenting it as a crash would teach the customer to distrust the
+    system for behaving properly.
+    """
+    blocks = [
+        _b("heading", "No analysis produced"),
+        _b("callout", f"**{refusal.code}**\n\n{refusal.message}", tone="warn"),
+    ]
+    if refusal.in_scope_hint:
+        blocks.append(_b("markdown", "**Currently in scope:** "
+                         + ", ".join(refusal.in_scope_hint)))
+    blocks.append(_b("divider"))
+    return blocks
+
 
 def header_blocks(view: ReportView) -> list[Block]:
     return [

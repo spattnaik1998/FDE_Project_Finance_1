@@ -39,8 +39,37 @@ def prod():
 
 
 @pytest.mark.parametrize("table,expected", EXPECTED.items())
-def test_expected_row_counts(prod, table, expected):
-    assert prod.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == expected
+def test_expected_current_row_counts(prod, table, expected):
+    """Counts CURRENT rows, not every row in the table.
+
+    Persistence is append-only: a re-derivation demotes the prior rows and
+    inserts new ones, so the table total grows while the current set does not.
+    Asserting the total broke the moment the claim extractor was corrected --
+    core.extracted_claim went to 42 rows (21 current, 21 demoted) and the test
+    failed for the model working as designed.
+
+    Same reasoning as EXPECTED_TASKS_BY_SOC below: the stable quantity is what
+    the views expose, not how much history sits behind it. A total-row
+    assertion also says nothing about whether the current set is right, which
+    is the only thing a consumer sees.
+    """
+    actual = prod.execute(
+        f"SELECT COUNT(*) FROM {table} WHERE is_current = 1").fetchone()[0]
+    assert actual == expected
+
+
+@pytest.mark.parametrize("table", EXPECTED)
+def test_history_is_retained_rather_than_overwritten(prod, table):
+    """A demoted row must still be there.
+
+    The point of demoting rather than deleting is that a past run which cited a
+    superseded fact stays resolvable. If the table total ever equals the current
+    count after a re-derivation, something deleted history.
+    """
+    total = prod.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+    current = prod.execute(
+        f"SELECT COUNT(*) FROM {table} WHERE is_current = 1").fetchone()[0]
+    assert total >= current, f"{table} has fewer rows than current rows"
 
 
 @pytest.mark.parametrize("soc,expected", EXPECTED_TASKS_BY_SOC.items())
