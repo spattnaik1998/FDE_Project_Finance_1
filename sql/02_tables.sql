@@ -410,6 +410,44 @@ GO
    two different classifiers is not one cohort. Mixing them would make a
    percentile an artefact of which occupation got which method, so the key
    makes that unrepresentable rather than merely discouraged. */
+/* Filtered indexes on the two read paths that had none.
+   Separate batches because these tables already exist in every deployed
+   database, so they cannot live inside the CREATE TABLE blocks above.
+
+   Every read of a fact table filters is_current = 1, and a filtered index puts
+   that predicate in the index rather than in a scan. Three tables already had
+   one -- core.task, core.adoption_observation, core.extracted_claim -- and these
+   two did not.
+
+   core.industry_metric is the one that matters: 16,057 rows and growing with
+   every FRED and BEA refresh, read by get_industry_metric on
+   (provider, series_id, industry_code). It was doing a filtered scan of the
+   largest table in the warehouse on the agent's hot path.
+
+   core.exposure_estimate is small at 774 rows, but the cohort calibration reads
+   it once per member with a measure + soc_code + is_current predicate, and an
+   index that matches the query exactly costs nothing to keep. */
+IF OBJECT_ID('core.industry_metric') IS NOT NULL
+   AND INDEXPROPERTY(OBJECT_ID('core.industry_metric'),
+                     'IX_metric_current', 'IndexID') IS NULL
+BEGIN
+    CREATE INDEX IX_metric_current ON core.industry_metric
+        (provider, series_id, industry_code, period)
+        INCLUDE (value, unit) WHERE is_current = 1;
+    PRINT 'Created IX_metric_current';
+END
+GO
+
+IF OBJECT_ID('core.exposure_estimate') IS NOT NULL
+   AND INDEXPROPERTY(OBJECT_ID('core.exposure_estimate'),
+                     'IX_expest_current', 'IndexID') IS NULL
+BEGIN
+    CREATE INDEX IX_expest_current ON core.exposure_estimate
+        (measure, soc_code) INCLUDE (value, percentile) WHERE is_current = 1;
+    PRINT 'Created IX_expest_current';
+END
+GO
+
 IF OBJECT_ID('score.cohort_index') IS NULL
 BEGIN
     CREATE TABLE score.cohort_index (

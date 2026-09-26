@@ -359,9 +359,15 @@ def provenance_blocks(view: ReportView) -> list[Block]:
              "value": view.trace_figures},
             {"label": "Every figure traced",
              "value": "yes" if view.trace_complete else "no"},
-            {"label": "Cleared for external use",
+            # Labelled as what it measures. It used to read "Cleared for
+            # external use" while being wired to the traceability walk alone, so
+            # it said "yes" on a run made with the cheap development model --- a
+            # run the Review Gate would refuse to release. Clearance is now a
+            # sentence below, which can state every condition.
+            {"label": "No unverified copies used",
              "value": "yes" if view.trace_customer_deliverable else "no"},
         ]),
+        _b("markdown", copy.clearance_note(view)),
         _b("table", {
             "columns": ["Source", "Published by", "Used for", "Fingerprint"],
             # The title, not the doc_id. `onet_task_statements` is our filing key

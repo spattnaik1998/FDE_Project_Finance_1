@@ -57,7 +57,13 @@ def test_verdict_with_blank_caveats_is_refused(cur, run_id, soc):
 
 def test_verdict_with_caveats_is_accepted(cur, run_id, soc):
     _verdict(cur, run_id, soc)
-    assert cur.execute("SELECT COUNT(*) FROM score.role_verdict").fetchone()[0] == 1
+    # Scoped to this run, not an absolute count of the table. The absolute form
+    # passes in isolation and fails the moment any other test in the session has
+    # persisted a verdict -- the same order-dependence that made two audit-log
+    # assertions green only in file order. A suite green in one order is not green.
+    assert cur.execute(
+        "SELECT COUNT(*) FROM score.role_verdict WHERE run_id = ?",
+        run_id).fetchone()[0] == 1
 
 
 # --- A lag interval cannot be inverted --------------------------------------

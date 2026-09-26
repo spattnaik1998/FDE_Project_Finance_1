@@ -259,7 +259,8 @@ def main() -> int:
     # It was caught only because the table had just been made append-only: the
     # genuine astra rows were still there, demoted rather than deleted, so the
     # mislabelling was both visible and reversible.
-    classifier_name = config.MODEL_CLASSIFIER if use_model else "baseline_keyword"
+    classifier_name = (config.MODEL_CLASSIFIER if use_model
+                       else baseline.BASELINE_VERSION)
 
     if args.persist:
         with connect(Principal.SCORE, database=args.database) as conn:

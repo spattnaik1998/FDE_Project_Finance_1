@@ -520,3 +520,80 @@ def test_persistence_can_be_skipped_for_a_dry_run(graph_db):
     assert not outcome.persisted
     assert outcome.state.verdict is not None
     assert "Persistence skipped" in outcome.notes[0]
+
+
+# ===========================================================================
+# Attribution: a score must name what produced it
+# ===========================================================================
+
+def test_a_run_that_cannot_name_its_classifier_refuses_to_persist():
+    """``score.task_score.model`` is an audit column, not a nice-to-have.
+
+    It used to fall back to the string "unknown", and 26 rows in the production
+    warehouse carry that. A placeholder there is not a missing value --- it is a
+    broken audit record for every figure in that run, and it was written
+    silently. A run that cannot say what scored it should fail before it
+    persists.
+    """
+    from graph import runner
+    from nodes.state import NodeDeps
+    from providers.accounting import Ledger
+
+    bare = NodeDeps(tools=None, tracker=None, audit=None, ledger=Ledger(),
+                    classifier=None)
+    with pytest.raises(runner.UnattributableScores):
+        runner._classifier_model(bare)
+
+
+def test_the_configured_classifier_attributes_a_run_that_made_no_model_call():
+    """A baseline run makes no model call and is still fully attributable."""
+    from graph import runner
+    from nodes.state import NodeDeps
+    from providers.accounting import Ledger
+
+    deps = NodeDeps(tools=None, tracker=None, audit=None, ledger=Ledger(),
+                    classifier="baseline_keyword_v1")
+    assert runner._classifier_model(deps) == "baseline_keyword_v1"
+
+
+def test_the_ledger_outranks_the_configuration():
+    """What actually ran beats what was configured to run.
+
+    If they disagree, the ledger is the fact: it records the model the provider
+    answered as. Recording the configured value over it would attribute a figure
+    to a model that never saw the task.
+    """
+    from graph import runner
+    from nodes.state import NodeDeps
+    from providers.accounting import Ledger, ModelCall
+    from providers.base import Usage
+
+    ledger = Ledger()
+    ledger.calls.append(ModelCall(
+        provider="openai", model="gpt-5.4-mini", stage="task_classifier",
+        prompt_version="v1", usage=Usage(), duration_ms=1, cost_usd=None))
+    deps = NodeDeps(tools=None, tracker=None, audit=None, ledger=ledger,
+                    classifier="gpt-6-astra")
+    assert runner._classifier_model(deps) == "gpt-5.4-mini"
+
+
+def test_the_baseline_classifier_has_exactly_one_name():
+    """A second name for one classifier splits the cohort reference set in two.
+
+    ``score.cohort_index`` is keyed on the classifier name so that a distribution
+    scored by two methods cannot pretend to be one cohort. A script writing
+    "baseline_keyword" while the module declares "baseline_keyword_v1" defeats
+    that from above --- the same way a hardcoded "gpt-6-astra" did --- and a
+    baseline run would then look up a reference set that exists under the other
+    name and silently find nothing.
+    """
+    from pathlib import Path
+
+    from scoring.baseline import BASELINE_VERSION
+
+    for path in sorted(Path("scripts").rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        assert '"baseline_keyword"' not in source, (
+            f"{path.as_posix()} names the baseline classifier by a literal that "
+            f"is not BASELINE_VERSION ({BASELINE_VERSION!r})")
+

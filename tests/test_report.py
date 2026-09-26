@@ -928,3 +928,66 @@ def test_a_mismatched_verification_does_not_clear_the_mirror(test_database):
         finally:
             cur.execute("DELETE FROM audit.source_verification WHERE source_doc_id='mis_doc'")
             cur.execute("DELETE FROM ref.source_document WHERE doc_id='mis_doc'")
+
+
+# ===========================================================================
+# The caveat path had a blanket exemption from the provenance chain
+# ===========================================================================
+
+def test_no_caveat_template_carries_a_figure():
+    """The one hole the traceability walk could not see.
+
+    ``report/render.py`` registers every number found in a caveat against the
+    run's bound documents wholesale. That is defensible for a figure the run
+    *computed* --- the cohort granularity, the spread ratio, a count of tasks ---
+    because those are derived from those very sources. It is not defensible for a
+    number typed into a Python string, and the renderer cannot tell the two apart
+    from the rendered text.
+
+    So the rule is enforced where the difference is visible: a caveat TEMPLATE
+    must not contain a figure. A template is written by us, not derived from data,
+    so any percentage or decimal in one is by definition unsourced.
+
+    This was live. The workforce caveat read "more skilled workers (47.2% up,
+    1.6% down), not fewer workers (12.5% up, 8.4% down)" --- four Census ABS
+    figures, from a module that is registered in ``ref.source_document`` and
+    carries zero rows in ``core.*``. They were attributed to O*NET, BTOS,
+    Brynjolfsson and Eloundou, none of which contain them, and the walk reported
+    "0 unregistered figures".
+
+    Integer identifiers are allowed through: NAICS 52 and 523, and the SOC code,
+    which the number scanner splits into "13" and "2051". Those name things rather
+    than measuring them.
+    """
+    from nodes.figure_guard import _numbers_in
+    from scoring.run import STANDING_CAVEATS
+
+    offenders = []
+    for caveat in STANDING_CAVEATS:
+        for literal, _ in _numbers_in(caveat):
+            # A percentage or a decimal is a measurement. A bare integer in a
+            # caveat template is a code (NAICS, SOC) or a small count.
+            if "%" in literal or "." in literal:
+                offenders.append((literal, caveat[:60]))
+
+    assert not offenders, (
+        "caveat templates carry figures that no source in this warehouse "
+        f"produces: {offenders}")
+
+
+def test_a_caveat_figure_is_attributed_to_the_run_sources_not_to_nothing():
+    """Guards the other direction: computed caveat figures must stay traceable.
+
+    Removing the blanket attribution entirely would have been the wrong fix. A
+    caveat that says "2 of 26 task classifications carry low confidence" is
+    reporting this run's own arithmetic over its own bound sources, and it should
+    trace to them. This asserts that still holds, so the test above cannot be
+    satisfied by simply dropping caveats out of the registry.
+    """
+    _, registry = render.render(_data())
+    caveat_figures = [f for f in registry.figures if "caveat" in f.label]
+    assert caveat_figures, "no caveat figure was registered at all"
+    for figure in caveat_figures:
+        assert figure.source_doc_ids, (
+            f"caveat figure {figure.literal!r} is attributed to no document")
+

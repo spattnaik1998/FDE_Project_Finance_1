@@ -189,7 +189,15 @@ def test_the_real_bls_leak_is_redacted():
     printed it to the console. Found during an actual rotation, which is the
     worst moment to discover it.
     """
-    key = "1813f3f767f64aa084e5356521050daf"
+    # A synthetic key of the same shape (32 hex characters), NOT the real one.
+    #
+    # This fixture used to be the live BLS key, which means the test that proves
+    # we do not leak the key is what leaked it -- committed, and into a public
+    # repository. The test only ever needed the shape: redaction works on the
+    # configured value and on the pattern, and neither cares whether the digits
+    # are real. test_no_configured_credential_appears_in_the_tracked_tree now
+    # makes the general version of this mistake fail the suite.
+    key = "0123456789abcdef0123456789abcdef"
     message = f"The key:{key} provided by the User is invalid"
 
     out = config.redact(message)
@@ -210,10 +218,13 @@ def test_a_configured_key_is_redacted_even_with_an_unknown_shape(monkeypatch):
     assert weird not in config.redact(f"rejected value {weird} sorry")
 
 
+# Synthetic tokens of each shape. The 32-hex entry was the real BLS key --- the
+# second place it was committed, in a parametrize list where it looked like test
+# data. Shape is all these cases need.
 @pytest.mark.parametrize("token", [
     "sk-abcdefghijklmnopqrstuvwx",
     "sk-ant-abcdefghijklmnopqrst",
-    "1813f3f767f64aa084e5356521050daf",
+    "fedcba9876543210fedcba9876543210",
     "A1B2C3D4-E5F6-7890-ABCD-EF1234567890",
 ])
 def test_credential_shapes_are_redacted(token):
@@ -324,3 +335,59 @@ def test_the_summary_names_the_models_actually_in_force():
     assert config.MODEL_CLASSIFIER in summary
     assert config.MODEL_WRITER in summary
     assert config.REASONING_EFFORT in summary
+
+
+# ===========================================================================
+# No credential may appear in the tracked tree
+# ===========================================================================
+
+def test_no_configured_credential_appears_in_the_tracked_tree():
+    """The general form of a mistake that was live in this repository.
+
+    ``test_the_real_bls_leak_is_redacted`` used the real BLS key as its fixture,
+    so the test that proves the key is redacted is what committed it --- to a
+    public repository. Gitignoring ``.env`` protects the file; it does nothing
+    about a value copied out of it into a test, a README, a notes file or a
+    docstring.
+
+    This reads the configured values at runtime and greps what git actually
+    tracks, so no secret appears in this file either. It does not and cannot fix
+    history: once a value is pushed it must be rotated, not redacted. What it does
+    is stop the next one going in.
+    """
+    import subprocess
+
+    from pathlib import Path
+
+    env = Path(".env")
+    if not env.exists():
+        pytest.skip("no .env in this environment; nothing to compare against")
+
+    values = {name: value
+              for name, value in config._parse_env_file(env).items()
+              if value and len(value) >= 16}
+    if not values:
+        pytest.skip(".env holds no credential long enough to search for")
+
+    tracked = subprocess.run(["git", "ls-files"], capture_output=True,
+                             text=True, errors="replace")
+    if tracked.returncode != 0:
+        pytest.skip("not a git working tree")
+
+    leaked: list[str] = []
+    for relative in tracked.stdout.splitlines():
+        path = Path(relative)
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for name, value in values.items():
+            if value in text:
+                leaked.append(f"{name} in {relative}")
+
+    assert not leaked, (
+        "credential values are committed in the tracked tree; these must be "
+        f"ROTATED, not merely deleted: {leaked}")
+

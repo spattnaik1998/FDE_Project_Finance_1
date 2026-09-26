@@ -178,6 +178,12 @@ class NodeDeps:
     # but never load it: this dataclass promises a node holds no credential,
     # and a node that opened its own connection to fetch the cohort would
     # quietly retract that promise.
+    # Which classifier this run identifies itself as. Held so the run can
+    # attribute its scores even when the ledger carries no classifier call --
+    # a baseline run makes none, and `score.task_score.model` used to record
+    # "unknown" for those, which is an attribution failure in the one column
+    # that says who produced a figure.
+    classifier: str | None = None
     cohort_indices: dict[str, float] | None = None
     cohort_benchmarks: dict[str, float] | None = None
     # The benchmark's full published population, for the spread diagnostic:

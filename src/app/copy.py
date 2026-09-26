@@ -311,6 +311,33 @@ TASKS_METHOD = (
     "than raising it."
 )
 
+def clearance_note(view) -> str:
+    """What "cleared to send out" actually requires, stated rather than implied.
+
+    The third provenance metric used to be labelled "Cleared for external use"
+    and was wired to the traceability walk alone --- which means it read "yes" on
+    a run made with the cheap development model, a run the Review Gate would
+    refuse to release. A metric that is wrong about what it certifies is worse
+    than one that is missing, and this project has now produced that same defect
+    shape four times.
+
+    So the metric says what it measures, and this sentence carries the rest.
+    """
+    if not view.trace_complete:
+        return ("Not cleared to send out: some figures on this page cannot be "
+                "traced to a source file.")
+    if view.unverified_mirrors:
+        return ("Not cleared to send out: part of the evidence came from a copy "
+                "we have not yet checked against the publisher.")
+    if not view.full_model_profile:
+        return ("Not cleared to send out: this run used our cheaper development "
+                "model. The figures are sound enough to review internally; a run "
+                "for a client is made on the full model.")
+    return ("Cleared to send out: every figure traces to a published file, no "
+            "unverified copies were used, and the run was made on the full "
+            "model.")
+
+
 PROVENANCE_METHOD = (
     "Each source listed was actually read during this run — recorded at the "
     "moment a query returned a row from it, not merely present in our "

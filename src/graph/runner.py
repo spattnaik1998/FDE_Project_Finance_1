@@ -121,6 +121,7 @@ def make_deps(run_id: str, *, database: str | None = None, provider_for=None,
         tools=EvidenceTools(tracker=tracker, audit=audit, database=database),
         tracker=tracker, audit=audit, ledger=Ledger(run_id=run_id),
         provider_for=provider_for, our_percentile=our_percentile,
+        classifier=classifier,
         cohort_indices=indices, cohort_benchmarks=benchmarks,
         cohort_population=population)
 
@@ -187,9 +188,29 @@ def invoke(request: str, *, deliverable: bool = False,
     return outcome
 
 
+class UnattributableScores(RuntimeError):
+    """A run could not name what produced its classifications."""
+
+
 def _classifier_model(deps: NodeDeps) -> str:
-    """Which model produced the classifications, for the score rows."""
+    """Which classifier produced the classifications, for the score rows.
+
+    Two sources, in order of authority: what the ledger records as having
+    actually run, then what the run was configured to use. It raises rather than
+    returning a placeholder.
+
+    This used to fall back to ``"unknown"``, and 26 rows in ``score.task_score``
+    carry that. It is the column that attributes a figure to its producer, so a
+    placeholder there is not a missing value --- it is a broken audit record, and
+    it was written silently. A run that cannot say what scored it should fail
+    before it persists, not after.
+    """
     for call in deps.ledger.calls:
         if call.stage == "task_classifier":
             return call.model
-    return "unknown"
+    if deps.classifier:
+        return deps.classifier
+    raise UnattributableScores(
+        "no classifier call in the ledger and no configured classifier, so "
+        "score.task_score.model cannot be attributed. Refusing to persist "
+        "scores whose producer is unknown.")

@@ -291,6 +291,11 @@ def test_unclear_is_carried_forward_not_re_prompted(evidenced_state):
                                                  confidence="low"))
     result = classifier.run(evidenced_state, deps_with(provider))
 
+    # Non-emptiness first. all() over an empty list is True, so a classifier that
+    # produced nothing at all would satisfy this test while proving the opposite
+    # of what it claims -- and "unclear is carried forward rather than
+    # re-prompted" is one of the refusals this system is built on.
+    assert result.classifications, "nothing was classified; the check is vacuous"
     assert all(c.direction is Direction.UNCLEAR for c in result.classifications)
     # One call per task, not one per task plus retries.
     assert len(provider.calls) == len(evidenced_state.evidence.tasks)
@@ -310,6 +315,7 @@ def test_the_degraded_fallback_does_not_inflate_exposure(evidenced_state):
     """Misreading judgment work as routine is the error direction that matters."""
     provider = FakeProvider(SchemaViolation("bad", provider="fake"))
     result = classifier.run(evidenced_state, deps_with(provider))
+    assert result.classifications, "nothing was classified; the check is vacuous"
     assert all(c.routine is Routine.NON_ROUTINE for c in result.classifications)
 
 

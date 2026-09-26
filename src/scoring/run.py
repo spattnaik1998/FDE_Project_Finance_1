@@ -51,9 +51,29 @@ STANDING_CAVEATS = [
     "rather than survey-based.",
     "The lag interval is not a fitted curve. The observed LLM-era window is "
     "under two years, which cannot identify a saturation level.",
+    # No percentages in this sentence, and their removal is the point.
+    #
+    # It used to read "more skilled workers (47.2% up, 1.6% down), not fewer
+    # workers (12.5% up, 8.4% down)". Those four figures are from the Census ABS
+    # workforce-impact module, which is registered in ref.source_document and
+    # carries ZERO rows in core.* -- so they were literals typed into this string,
+    # with no source in the warehouse at all.
+    #
+    # And they rendered as traced, because report/render.py attributes every
+    # number found in a caveat to the run's bound documents wholesale. A figure
+    # from Census was therefore attributed to O*NET, BTOS, Brynjolfsson and
+    # Eloundou, none of which contain it, and the traceability walk reported
+    # "0 unregistered". That is the provenance chain's central claim failing
+    # quietly on the one path that had a blanket exemption.
+    #
+    # The finding itself is sound and stays: it is supported by the extracted
+    # claims, which carry verbatim quotes and page numbers. What it no longer
+    # does is quote figures this warehouse cannot produce. Loading the ABS module
+    # into core.industry_metric would let the numbers come back, properly
+    # sourced; until then the claim is stated qualitatively.
     "Exposure is technical susceptibility, not displacement. Among finance "
-    "firms that adopted AI, the dominant reported effect was more skilled "
-    "workers (47.2% up, 1.6% down), not fewer workers (12.5% up, 8.4% down).",
+    "firms that adopted AI, far more reported their workforce becoming more "
+    "skilled than reported it shrinking.",
 ]
 
 

@@ -127,6 +127,14 @@ class ReportView:
     trace_figures: str = "0"
     trace_complete: bool = False
     trace_customer_deliverable: bool = False
+    # Whether this run used the full model profile. Clearance to send a document
+    # out is not a provenance property alone: the Review Gate also refuses to
+    # release a run made on the development model, and the page has to agree with
+    # the gate rather than contradict it.
+    #
+    # Defaults False, which is the safe direction: the question this answers is
+    # "may I send this out", and an unset flag is not a yes.
+    full_model_profile: bool = False
     trace_detail: str = ""
 
     git_sha: str = ""

@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
+import config
 from report import provenance, reader, render
 from report.reader import ReportData
 
@@ -130,6 +131,24 @@ def _presentation_forms(data: ReportData) -> frozenset[str]:
     return frozenset(forms)
 
 
+def _ran_on_the_full_profile(data: ReportData) -> bool:
+    """Whether the run that produced these figures used the full model profile.
+
+    Derived from the model recorded against the run's scores rather than from
+    ``config.MODEL_PROFILE``, because the configuration can change between the
+    run and the reading. A page that reported the current setting would describe
+    this process, not the document.
+    """
+    full = set(config.MODEL_PROFILES["full"].values())
+    models = {t.model for t in data.tasks if getattr(t, "model", None)}
+    if not models:
+        # No attribution recorded. Refusing to claim clearance is the safe
+        # direction: the question is "may I send this out", and "we cannot tell
+        # what scored it" is not a yes.
+        return False
+    return models.issubset(full)
+
+
 def _bar(value) -> str:
     """One task's net exposure as a CSS width.
 
@@ -228,6 +247,10 @@ def _to_view(data: ReportData, registry, trace, markdown: str) -> ReportView:
         trace_complete=trace.is_complete,
         trace_customer_deliverable=trace.customer_deliverable,
         trace_detail=trace.failure_detail(),
+        # Read from the run's recorded model, not from the profile in force now:
+        # a page rendered next month must say what produced THAT run, not what
+        # this process happens to be configured with.
+        full_model_profile=_ran_on_the_full_profile(data),
 
         git_sha=data.git_sha,
         rubric_version=data.rubric_version,

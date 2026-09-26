@@ -1319,3 +1319,83 @@ def test_the_form_asks_before_it_spends():
     assert dispatcher.index("if not confirm:") < dispatcher.index(
         'st.session_state["pending_request"] = question')
 
+
+# ===========================================================================
+# Clearance: the page must agree with the gate, not contradict it
+# ===========================================================================
+
+def test_an_economy_profile_run_is_not_shown_as_cleared_to_send_out():
+    """The fourth instance of this project's recurring defect shape.
+
+    The third provenance metric was labelled "Cleared for external use" and wired
+    to the traceability walk alone. So it read "yes" on a run made with the cheap
+    development model --- a run the Review Gate refuses to release. A metric that
+    is wrong about what it certifies is worse than a missing one, and this is the
+    same shape as the benchmark tool that said "no published benchmark" when the
+    truth was a code-system mismatch, and the calibration row that stored 0.00 for
+    an absent percentile.
+    """
+    from app import copy as ui_copy
+
+    # No mirror and a complete trace, so the model profile is the only thing
+    # standing in the way -- otherwise this asserts the wrong branch.
+    economy = _view(full_model_profile=False, trace_complete=True,
+                    trace_customer_deliverable=True, sources=())
+    note = ui_copy.clearance_note(economy)
+    assert "Not cleared" in note
+    assert "development model" in note
+
+    full = _view(full_model_profile=True, trace_complete=True,
+                 trace_customer_deliverable=True, sources=())
+    assert ui_copy.clearance_note(full).startswith("Cleared to send out")
+
+
+def test_clearance_names_the_first_blocking_reason():
+    """One reason, the most fundamental one, not a list of everything wrong."""
+    from app import copy as ui_copy
+
+    broken = _view(trace_complete=False, full_model_profile=False)
+    assert "cannot be traced" in ui_copy.clearance_note(broken)
+
+
+def test_the_provenance_metric_says_what_it_measures():
+    """The label must not promise more than the boolean behind it."""
+    view = _view()
+    labels = {m["label"] for b in page(view) if b.kind == "metrics"
+              for m in b.payload}
+    assert "No unverified copies used" in labels
+    assert "Cleared for external use" not in labels, (
+        "that label promises a gate decision the boolean does not make")
+
+
+def test_clearance_is_read_from_the_run_not_from_the_current_config(monkeypatch):
+    """A page rendered later must describe the run, not this process.
+
+    Derived from the model recorded against the run's scores. Reading
+    config.MODEL_PROFILE instead would make an archived document's clearance
+    change when someone edits a config file.
+    """
+    import config
+    from app import gateway
+
+    monkeypatch.setattr(config, "MODEL_PROFILE", "full")
+
+    class Task:
+        model = "gpt-5.4-mini"
+
+    class Data:
+        tasks = [Task()]
+
+    assert gateway._ran_on_the_full_profile(Data()) is False, (
+        "clearance followed the current config instead of the run's own record")
+
+
+def test_an_unattributed_run_is_never_cleared():
+    """No attribution is not a yes."""
+    from app import gateway
+
+    class Data:
+        tasks = []
+
+    assert gateway._ran_on_the_full_profile(Data()) is False
+
