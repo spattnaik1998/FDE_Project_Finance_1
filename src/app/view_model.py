@@ -72,7 +72,8 @@ class StandingView:
     headline: str
     meaning: str
     tone: str                 # 'ok' | 'warn' | 'stop'
-    reason: str | None = None
+    reason: str | None = None       # why, in a business reader's terms
+    workings: str | None = None     # the statistical argument, one level down
 
 
 @dataclass(frozen=True)
@@ -148,6 +149,20 @@ class ReportView:
             return f"{float(self.exposure_index) * 100:.1f}%"
         except (TypeError, ValueError):
             return "0%"
+
+    @property
+    def exposure_share_text(self) -> str:
+        """The index as a whole-number share, for prose.
+
+        "roughly 38%" is what a reader can carry out of the room; "0.384" is what
+        the arithmetic produced. Both are the same provenanced quantity, and the
+        gateway adds this rendering to the traced set so prose cannot introduce a
+        figure the report never sourced.
+        """
+        try:
+            return f"{round(float(self.exposure_index) * 100)}%"
+        except (TypeError, ValueError):
+            return "an unknown share"
 
     @property
     def lag_interval(self) -> str:

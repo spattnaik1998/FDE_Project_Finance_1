@@ -42,7 +42,11 @@ from app.view_model import ReportView
 PAGE_TITLE = "Task Exposure & Adoption Lag"
 DEFAULT_QUESTION = ("Which of our equity research associate cost lines are "
                     "exposed to agent substitution, and on what timetable?")
-TONE_RENDERER = {"ok": "success", "warn": "warning", "stop": "error"}
+# "info" is a neutral aside -- the sentence that stops a reader over-reading a
+# figure is not a warning about the figure, and styling it as one would undercut
+# the number it is protecting.
+TONE_RENDERER = {"ok": "success", "warn": "warning", "stop": "error",
+                 "info": "info"}
 
 
 def render_block(block: blocks_module.Block) -> None:
@@ -104,6 +108,23 @@ def render_block(block: blocks_module.Block) -> None:
             f'<span class="dash"></span>'
             f'<span class="tick">{payload["high"]}</span>'
             f'</div>{note}', unsafe_allow_html=True)
+    elif kind == "masthead":
+        st.markdown(
+            f'<div class="masthead">'
+            f'<div class="eyebrow">{payload["eyebrow"]}</div>'
+            f'<h1>{payload["title"]}</h1>'
+            f'<div class="question">{payload["question"]}</div>'
+            f'<div class="meta">{payload["meta"]}</div>'
+            f'</div>', unsafe_allow_html=True)
+    elif kind == "panel":
+        # A container, so the finding reads as one object rather than as loose
+        # paragraphs. Streamlit cannot wrap arbitrary widgets in a div, so the
+        # rule and the padding are drawn by a bordered container instead.
+        with st.container(border=True):
+            st.markdown(f'<div class="panel-label">{meta["label"]}</div>',
+                        unsafe_allow_html=True)
+            for inner in payload:
+                render_block(inner)
     elif kind == "standing":
         st.markdown(
             f'<div class="standing {payload["tone"]}">'
@@ -117,15 +138,13 @@ def render_block(block: blocks_module.Block) -> None:
             question = st.text_area(payload["label"],
                                     value=payload["default_question"],
                                     height=90, max_chars=500)
-            confirm = st.checkbox(
-                "I understand this issues model calls and will block",
-                value=False)
+            confirm = st.checkbox(payload["confirm_label"], value=False)
             submitted = st.form_submit_button(payload["submit_label"],
                                               type="primary")
         if submitted:
             if not confirm:
-                st.warning("Tick the confirmation before running. A button that "
-                           "quietly spends model calls is not one to trust.")
+                st.warning("Please tick the box before running. A button that "
+                           "quietly spends money is not one to trust.")
             else:
                 st.session_state["pending_request"] = question
                 st.rerun()

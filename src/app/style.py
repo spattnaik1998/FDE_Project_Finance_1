@@ -69,6 +69,47 @@ h2, h3 {
 
 p, li { color: var(--ink); line-height: 1.62; }
 
+/* ---- masthead: an institutional letterhead, not a dashboard title ---- */
+.masthead { padding: .2rem 0 1.1rem; border-bottom: 2px solid var(--ink); margin-bottom: 1.4rem; }
+.masthead .eyebrow {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: .68rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .18em; color: var(--deep); margin-bottom: .5rem;
+}
+.masthead h1 {
+  font-size: 2.15rem !important; font-weight: 600 !important; line-height: 1.1;
+  letter-spacing: -0.022em; margin: 0 0 .5rem !important; color: var(--ink) !important;
+}
+.masthead .question {
+  font-size: 1.02rem; color: var(--ink-soft); line-height: 1.5;
+  max-width: 62ch; margin-bottom: .75rem;
+}
+.masthead .meta {
+  font-family: 'IBM Plex Mono', monospace; font-size: .72rem;
+  color: var(--ink-faint); letter-spacing: .02em;
+}
+
+/* ---- the bottom-line panel ------------------------------------------- */
+/* A bordered container, so the finding reads as one object. The label is set
+   in the deep ink rather than a fill, for the same reason the standing is a
+   stamp: an institution states its conclusion, it does not highlight it. */
+[data-testid="stVerticalBlockBorderWrapper"] {
+  border-radius: 0 !important; border-color: var(--ink) !important;
+  border-width: 0 0 0 3px !important; background: var(--panel);
+  padding: 1.1rem 1.3rem !important;
+}
+.panel-label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: .68rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .16em; color: var(--deep); margin-bottom: .55rem;
+}
+[data-testid="stVerticalBlockBorderWrapper"] p { font-size: 1.02rem; line-height: 1.6; }
+
+/* Expanders read as footnotes, not as interactive furniture. */
+[data-testid="stExpander"] details { border: none; border-top: 1px solid var(--rule); border-radius: 0; background: transparent; }
+[data-testid="stExpander"] summary { font-size: .78rem; color: var(--ink-soft); padding-left: 0; }
+[data-testid="stExpander"] summary:hover { color: var(--deep); }
+
 /* ---- the figures are the typography ---------------------------------- */
 .fig {
   font-family: 'IBM Plex Mono', monospace;

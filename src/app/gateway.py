@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from report import provenance, reader, render
 from report.reader import ReportData
 
+from app import copy as ui_copy
 from app.view_model import (ClaimView, ReportView, SourceView, StandingView,
                             TaskRowView)
 
@@ -82,21 +83,24 @@ def load_view(run_id: str | None = None, *,
 
 def _standing(data: ReportData) -> StandingView:
     """The headline, and why, in customer language."""
-    headline, meaning = render.STANDING.get(
-        data.status, ("UNKNOWN STANDING", "Status not recognised."))
+    # From app.copy, not report.render. The report is a technical document and
+    # may say "review_required"; the page is read by someone deciding headcount
+    # and needs a usability verdict they can act on. Two vocabularies, on
+    # purpose -- the same status, said to two different readers.
+    headline, meaning = ui_copy.STANDING.get(
+        data.status, ("Status unclear", "This run's state is not recognised."))
+    # Two levels, because they answer different questions. `reason` says why the
+    # check could not settle it in terms a research director can act on;
+    # `workings` is the statistical argument itself, kept verbatim from the
+    # report so the rigour is one click away rather than paraphrased away.
     reason = None
-    if not data.calibration_is_identifiable:
-        reason = (
-            "Calibration compares our exposure index to a published benchmark "
-            "as a percentile — a rank within a distribution. This run scored a "
-            "single occupation, and one score has no rank, so no percentile of "
-            "our own exists to compare against. The comparison is not in "
-            "disagreement; it is unidentifiable. Scoring several occupations "
-            "together resolves it.")
-    elif data.calibration_explanation:
-        reason = data.calibration_explanation
+    if data.status == "review_required":
+        reason = (ui_copy.WHY_INCONCLUSIVE if data.calibration_is_identifiable
+                  else ui_copy.WHY_UNIDENTIFIABLE)
+    workings = data.calibration_explanation or None
     return StandingView(headline=headline, meaning=meaning,
-                        tone=TONE.get(data.status, "warn"), reason=reason)
+                        tone=TONE.get(data.status, "warn"), reason=reason,
+                        workings=workings)
 
 
 def _presentation_forms(data: ReportData) -> frozenset[str]:
@@ -114,7 +118,9 @@ def _presentation_forms(data: ReportData) -> frozenset[str]:
     """
     forms: set[str] = set()
     try:
-        forms.add(f"{float(data.exposure_index) * 100:.1f}%")
+        share = float(data.exposure_index) * 100
+        forms.add(f"{share:.1f}%")        # the meter's CSS width
+        forms.add(f"{round(share)}%")     # the share quoted in prose
     except (TypeError, ValueError):
         pass
     return frozenset(forms)

@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 
 from app import blocks as blocks_module
+from app import copy
 from app.blocks import Block, displayed_strings, page
 from app.view_model import (ClaimView, ReportView, SourceView, StandingView,
                             TaskRowView)
@@ -102,7 +103,11 @@ def _view(**overrides) -> ReportView:
                            # index in another unit. The gateway adds it via
                            # _presentation_forms, so the fixture has to model
                            # that or this set stops describing a real view.
-                           "38.0%"}),
+                           "38.0%",
+                           # And the same index rounded for prose. Both forms
+                           # come from _presentation_forms; a fixture carrying
+                           # one but not the other stops describing a real view.
+                           "38%"}),
         markdown="# report\n")
     base.update(overrides)
     return ReportView(**base)
@@ -309,18 +314,51 @@ def test_no_block_performs_arithmetic():
 # Standing leads, and says why
 # ===========================================================================
 
-def test_the_standing_is_the_first_thing_after_the_header():
+def test_the_finding_leads_and_the_standing_is_immediately_under_it():
+    """A deliberate reversal, and the reason is worth pinning.
+
+    The standing used to be the first section, on the principle that a reader
+    should know what a figure is worth before seeing it. But a reader who has
+    not yet seen the figure has nothing to weigh, and a page opening on a caveat
+    reads as an apology. So the bottom line leads --- and the standing is the
+    very next section, ahead of every other, which is the part that must not
+    slip. This test fails if the standing is pushed down the page.
+    """
     page_blocks = page(_view())
     kinds = [b.kind for b in page_blocks]
-    headings = [i for i, b in enumerate(page_blocks) if b.kind == "heading"]
-    assert page_blocks[headings[0]].payload.startswith("1. Standing")
+    assert kinds[0] == "masthead"
+    panel = next(i for i, b in enumerate(page_blocks) if b.kind == "panel")
 
-    standing_index = headings[0]
-    exposure_index = next(i for i, b in enumerate(page_blocks)
-                          if b.kind == "heading"
-                          and b.payload.startswith("2. Exposure"))
-    assert standing_index < exposure_index
-    assert "title" in kinds
+    headings = [i for i, b in enumerate(page_blocks) if b.kind == "heading"]
+    assert page_blocks[headings[0]].payload == copy.HEADINGS["standing"]
+    assert panel < headings[0], "the finding must precede the standing"
+
+    exposure = next(i for i, b in enumerate(page_blocks)
+                    if b.kind == "heading"
+                    and b.payload == copy.HEADINGS["exposure"])
+    assert headings[0] < exposure
+    # The stamp itself is above every figure section, not merely its heading.
+    stamp = next(i for i, b in enumerate(page_blocks) if b.kind == "standing")
+    assert stamp < exposure
+
+
+def test_the_bottom_line_states_the_whole_finding_in_business_terms():
+    """What a client reads in the first ten seconds.
+
+    All three quantities the decision needs --- how much, which way, and when
+    --- in one panel, without a metric name in sight. A page that makes a
+    research director hunt across three sections to assemble the answer has not
+    delivered it.
+    """
+    view = _view()
+    panel = next(b for b in page(view) if b.kind == "panel")
+    text = " ".join(displayed_strings(panel.payload))
+
+    assert view.exposure_share_text in text
+    assert view.lag_p50 in text
+    for jargon in ("percentile", "index", "p50", "tacitness", "Polanyi",
+                   "Acemoglu"):
+        assert jargon not in text, f"{jargon!r} is not client language"
 
 
 def test_the_standing_stamp_carries_the_tone():
@@ -367,10 +405,12 @@ def test_an_unidentifiable_percentile_is_never_shown_as_a_number():
     view = _view()
     strings = " ".join(displayed_strings(page(view)))
 
-    assert "not identifiable" in strings
-    # No metric may present our percentile as 0.
+    # Stated as an absence in plain words, not as the token "not identifiable",
+    # which is a pipeline state rather than an answer to a client's question.
+    assert "nothing to compare against" in strings
+    # And no metric may present our percentile at all -- as 0 or otherwise.
     metrics = [m for b in page(view) if b.kind == "metrics" for m in b.payload]
-    ours = [m for m in metrics if "Our percentile" in m["label"]]
+    ours = [m for m in metrics if "ranks at" in m["label"]]
     assert not ours, "an unidentifiable percentile was rendered as a metric"
 
 
@@ -380,7 +420,7 @@ def test_an_identifiable_run_does_show_the_delta():
                  figures=frozenset({"80.00", "6.82", "86.82"}))
     metrics = [m for b in page(view) if b.kind == "metrics" for m in b.payload]
     labels = {m["label"] for m in metrics}
-    assert "Our percentile" in labels and "Delta" in labels
+    assert "Our estimate ranks at" in labels and "Difference" in labels
 
 
 # ===========================================================================
@@ -389,14 +429,18 @@ def test_an_identifiable_run_does_show_the_delta():
 
 def test_exposure_and_lag_are_separate_sections_in_the_ui():
     headings = [b.payload for b in page(_view()) if b.kind == "heading"]
-    assert any(h.startswith("2. Exposure") for h in headings)
-    assert any(h.startswith("3. Adoption lag") for h in headings)
+    assert copy.HEADINGS["exposure"] in headings
+    assert copy.HEADINGS["lag"] in headings
+    # Distinct headings, so neither can be read as a restatement of the other.
+    assert copy.HEADINGS["exposure"] != copy.HEADINGS["lag"]
 
 
 def test_the_ui_states_that_exposure_is_not_a_timetable():
     strings = " ".join(displayed_strings(page(_view())))
-    assert "not** a timetable" in strings or "not a timetable" in strings
-    assert "independently of the exposure index" in strings
+    assert "not a timetable" in strings
+    # And the reverse direction: the timetable says it cannot see the exposure
+    # figure. Said in plain words now, so this asserts what a client reads.
+    assert "cannot see this number" in strings
 
 
 def test_the_ui_emits_no_combined_risk_score():
@@ -407,7 +451,8 @@ def test_the_ui_emits_no_combined_risk_score():
 
 def test_the_lag_says_no_curve_is_fitted():
     strings = " ".join(displayed_strings(page(_view())))
-    assert "No curve is fitted" in strings
+    assert "We do not fit a curve" in strings
+    assert "manufacture precision" in strings
 
 
 # ===========================================================================
@@ -449,8 +494,16 @@ def test_every_claim_shows_its_verbatim_quote_and_page():
 
 
 def test_the_claim_panel_states_its_binding_granularity():
+    """The trace is document-level, and the page must not imply otherwise.
+
+    The wording moved out of the jargon ("binding granularity") and into what it
+    actually means, so this asserts the claim rather than the phrase: the page
+    says which document a figure came from, and says it does not say which
+    sentence.
+    """
     strings = " ".join(displayed_strings(page(_view())))
-    assert "Binding granularity" in strings
+    assert "not which individual sentence" in strings
+    assert "document-level" in strings
 
 
 def test_every_caveat_reaches_the_page():
@@ -562,7 +615,9 @@ def test_a_view_with_no_grounding_omits_that_panel():
 
 def test_zero_substitutions_is_reported_against_the_prior():
     strings = " ".join(displayed_strings(page(_view())))
-    assert "No task was judged to be substituted outright" in strings
+    # Said as an answer to the client's question, not as a methods note.
+    assert "none** looked like outright replacement" in strings
+    assert "more skilled" in strings
     assert "more skilled" in strings
 
 
@@ -635,19 +690,18 @@ def test_the_app_renders_all_eight_report_sections(executed_app):
     addition while saying nothing about whether the report is complete.
     """
     headings = [s.value for s in executed_app.subheader]
-    for expected in ("1. Standing", "2. Exposure", "3. Adoption lag",
-                     "4. Calibration", "5. Direction", "6. Per-task detail",
-                     "7. Limitations", "8. Provenance"):
-        assert any(h.startswith(expected) for h in headings), (
-            f"{expected} did not render; got {headings}")
+    for key in ("standing", "exposure", "lag", "calibration", "direction",
+                "tasks", "limits", "provenance"):
+        assert copy.HEADINGS[key] in headings, (
+            f"{key} section did not render; got {headings}")
 
 
 def test_the_app_offers_the_request_form_above_the_report(executed_app):
     """The customer's own question is the entry point, so it comes first."""
     headings = [s.value for s in executed_app.subheader]
-    assert "Run a new analysis" in headings
-    assert headings.index("Run a new analysis") < next(
-        i for i, h in enumerate(headings) if h.startswith("1. Standing"))
+    assert copy.FORM_HEADING in headings
+    assert headings.index(copy.FORM_HEADING) < headings.index(
+        copy.HEADINGS["standing"])
 
 
 def test_the_app_renders_the_headline_figures(executed_app):
@@ -659,11 +713,12 @@ def test_the_app_renders_the_headline_figures(executed_app):
     list, and the provenance metrics stay as tiles.
     """
     rendered = " ".join(m.value for m in executed_app.markdown)
-    for expected in ("Role exposure index", "Years to reorganisation"):
+    for expected in ("Share of tasks AI could perform today",
+                     "Years before the cost line moves"):
         assert expected in rendered, f"{expected} did not render"
 
     labels = [m.label for m in executed_app.metric]
-    assert "Figures traced" in labels
+    assert "Figures traced to a source" in labels
 
 
 def test_the_app_renders_the_tables(executed_app):
@@ -682,7 +737,8 @@ def test_an_uncalibrated_run_states_its_standing_without_alarming(executed_app):
     """
     rendered = " ".join(m.value for m in executed_app.markdown)
 
-    assert "NOT YET CALIBRATED" in rendered or "CALIBRATED" in rendered, (
+    tags = [tag for tag, _ in copy.STANDING.values()]
+    assert any(tag in rendered for tag in tags), (
         "the run's standing must appear on the page")
     assert len(executed_app.error) == 0, [e.value for e in executed_app.error]
 
@@ -696,8 +752,8 @@ def test_the_app_does_not_render_our_percentile_when_unidentifiable(
     if view.calibration_is_identifiable:
         pytest.skip("this run calibrated; the unidentifiable path is not live")
     labels = [m.label for m in executed_app.metric]
-    assert "Our percentile" not in labels
-    assert "Delta" not in labels
+    assert not any("ranks at" in label for label in labels)
+    assert "Difference" not in labels
 
 
 # ===========================================================================
@@ -829,7 +885,7 @@ def test_the_request_form_renders_without_arithmetic():
     text = " ".join(displayed_strings(page))
     # Cost is operational detail, not a finding, so it sits inside the coverage
     # disclosure rather than as the first thing a client reads.
-    assert "model calls" in text
+    assert "AI models" in text and str(RunCost().calls) in text
     assert "13-2051.00" in text                    # in-scope list is shown
 
 
@@ -846,7 +902,7 @@ def test_the_in_scope_list_is_shown_before_a_run_is_offered():
                     "tasks": 11}]
     page = request_form_blocks(occupations, "q", RunCost())
     labels = [b.meta.get("label", "") for b in page if b.kind == "expander"]
-    assert any("in scope" in label.lower() for label in labels)
+    assert any("what we cover" in label.lower() for label in labels)
     assert any("Credit Analysts" in t for t in displayed_strings(page))
 
 
