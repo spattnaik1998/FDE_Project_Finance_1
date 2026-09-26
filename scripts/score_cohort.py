@@ -26,6 +26,7 @@ import time
 
 sys.path.insert(0, "src")
 
+import config
 from nodes import classifier as classifier_node
 from nodes import retrieval
 from nodes.state import Evidence, NodeDeps, Phase, RunState, Scope
@@ -58,10 +59,22 @@ def cohort_members(cursor) -> dict[str, dict]:
         GROUP BY t.soc_code, o.title
         ORDER BY t.soc_code""", FAMILY + "%").fetchall()
 
+    # core.exposure_estimate, not dbo.VW_EXPOSURE_BENCHMARK -- the same
+    # correction cohort.load_benchmarks already carries, which this script was
+    # missed by. The VW_* layer is the AGENT's scope control and is granted to
+    # db_fde_ro alone; this runs in the scoring tier under db_fde_score, which
+    # holds SELECT on SCHEMA::core because it is the tier that computes over
+    # facts. The query worked until privilege isolation was enabled and then
+    # failed on the first run under it. Widening the view grants would have been
+    # the quick fix and would have blurred the tiers.
+    #
+    # is_current = 1 reproduces the view's filter: under append-only
+    # persistence a superseded version is still present, and including it would
+    # put one occupation's benchmark into the distribution twice.
     benchmark = {r[0]: float(r[1]) for r in cursor.execute("""
-        SELECT SOC_Code, Percentile FROM dbo.VW_EXPOSURE_BENCHMARK
-        WHERE Measure = ? AND SOC_Code LIKE ?""", MEASURE, FAMILY + "%"
-    ).fetchall() if r[1] is not None}
+        SELECT soc_code, percentile FROM core.exposure_estimate
+        WHERE measure = ? AND is_current = 1 AND soc_code LIKE ?""",
+        MEASURE, FAMILY + "%").fetchall() if r[1] is not None}
 
     members = {}
     for soc_code, title, tasks in rows:
@@ -234,7 +247,19 @@ def main() -> int:
     print(f"  delta                  {verdict.calibration.delta}")
     print(f"  within tolerance       {verdict.calibration.within_tolerance}")
 
-    classifier_name = "gpt-6-astra" if use_model else "baseline_keyword"
+    # config.MODEL_CLASSIFIER, not a literal.
+    #
+    # This line read "gpt-6-astra" and that is how a cohort scored on
+    # gpt-5.4-mini came to be written under gpt-6-astra's key -- the exact
+    # mixture the (cohort, classifier, rubric) key exists to make
+    # unrepresentable, defeated by a hardcoded string one layer above it. A
+    # percentile computed against it would have been an artefact of which model
+    # happened to score which occupation, and nothing would have said so.
+    #
+    # It was caught only because the table had just been made append-only: the
+    # genuine astra rows were still there, demoted rather than deleted, so the
+    # mislabelling was both visible and reversible.
+    classifier_name = config.MODEL_CLASSIFIER if use_model else "baseline_keyword"
 
     if args.persist:
         with connect(Principal.SCORE, database=args.database) as conn:

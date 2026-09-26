@@ -126,6 +126,13 @@ DENY UPDATE ON score.role_verdict TO db_fde_score;
 DENY UPDATE ON score.calibration  TO db_fde_score;
 DENY DELETE ON SCHEMA::score TO db_fde_score;
 
+/* Column-scoped, exactly as db_fde_load holds it on core.*. Re-deriving the
+   cohort reference set demotes the previous version rather than deleting it, so
+   the scoring tier needs to write that one flag and nothing else. The findings
+   themselves -- task_score, role_verdict, calibration -- stay DENY UPDATE
+   above, so this does not let the scoring tier revise a figure it published. */
+GRANT UPDATE (is_current, superseded_at) ON score.cohort_index TO db_fde_score;
+
 GRANT INSERT, SELECT ON audit.run_source_binding TO db_fde_score;
 GRANT INSERT, SELECT ON audit.quality_assertion  TO db_fde_score;
 /* The scoring/report side reads verifications to decide whether a mirror still

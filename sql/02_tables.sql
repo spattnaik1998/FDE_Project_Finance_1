@@ -421,13 +421,90 @@ BEGIN
         tasks_scored     INT           NOT NULL,
         source_run_id    UNIQUEIDENTIFIER NULL,
         computed_at      DATETIME2     NOT NULL CONSTRAINT DF_cohort_at DEFAULT SYSUTCDATETIME(),
-        CONSTRAINT PK_cohort_index PRIMARY KEY
-            (cohort_name, classifier, rubric_version, soc_code),
+        cohort_index_id  INT IDENTITY(1,1) NOT NULL,
+        is_current       BIT           NOT NULL CONSTRAINT DF_cohort_current DEFAULT 1,
+        superseded_at    DATETIME2     NULL,
+        CONSTRAINT PK_cohort_index PRIMARY KEY (cohort_index_id),
         CONSTRAINT FK_cohort_occ   FOREIGN KEY (soc_code) REFERENCES ref.occupation (soc_code),
         CONSTRAINT CK_cohort_index CHECK (exposure_index BETWEEN 0 AND 1),
         CONSTRAINT CK_cohort_tasks CHECK (tasks_scored > 0)
     );
     PRINT 'Created score.cohort_index';
+END
+GO
+
+/* Migration: append-only versioning for an existing score.cohort_index.
+   Idempotent -- keyed on the absence of the column, so re-running does nothing.
+
+   The original table had (cohort, classifier, rubric, soc) as its primary key
+   and persist_cohort refreshed it with DELETE-then-INSERT. That could not run
+   under real privilege isolation at all: sql/04 holds
+   DENY DELETE ON SCHEMA::score TO db_fde_score, deliberately. The contradiction
+   was invisible for as long as every connection fell back to the developer
+   credential.
+
+   Granting DELETE would have been the quick fix and the wrong one. A past run's
+   percentile in score.calibration is only interpretable against the
+   distribution it was ranked in, so deleting that distribution silently changes
+   what a stored figure means -- the same defect the architect caught in core.*
+   at review, in a table nobody had applied the lesson to. */
+IF COL_LENGTH('score.cohort_index', 'is_current') IS NULL
+BEGIN
+    ALTER TABLE score.cohort_index ADD
+        cohort_index_id INT IDENTITY(1,1) NOT NULL,
+        is_current      BIT NOT NULL CONSTRAINT DF_cohort_current DEFAULT 1,
+        superseded_at   DATETIME2 NULL;
+    PRINT 'Migrated score.cohort_index to append-only versioning';
+END
+GO
+
+/* Separate batches from here, and not for tidiness. SQL Server compiles a whole
+   batch before executing any of it, so a statement naming a column that an
+   earlier statement in the same batch adds fails on "invalid column name" --
+   even when the IF around it is false and the statement would never run. The
+   first cut of this migration failed exactly that way against a database where
+   the column was already present. */
+/* Move the primary key to the surrogate, by inspecting which columns it
+   actually covers rather than by name. OBJECT_ID('PK_cohort_index', 'PK')
+   returns NULL for a constraint in the score schema unless it is qualified,
+   which is how the first attempt skipped the drop and then failed adding a
+   second primary key. Asking sys.indexes what the key covers is both correct
+   and re-runnable. */
+IF EXISTS (SELECT 1
+             FROM sys.indexes i
+             JOIN sys.index_columns ic ON ic.object_id = i.object_id
+                                      AND ic.index_id = i.index_id
+             JOIN sys.columns c ON c.object_id = i.object_id
+                               AND c.column_id = ic.column_id
+            WHERE i.object_id = OBJECT_ID('score.cohort_index')
+              AND i.is_primary_key = 1 AND c.name = 'cohort_name')
+BEGIN
+    ALTER TABLE score.cohort_index DROP CONSTRAINT PK_cohort_index;
+    PRINT 'Dropped the natural-key primary key on score.cohort_index';
+END
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes
+                WHERE object_id = OBJECT_ID('score.cohort_index')
+                  AND is_primary_key = 1)
+BEGIN
+    ALTER TABLE score.cohort_index
+        ADD CONSTRAINT PK_cohort_index PRIMARY KEY (cohort_index_id);
+    PRINT 'Created PK_cohort_index on the surrogate key';
+END
+GO
+
+/* One CURRENT row per key, enforced by a filtered unique index rather than by
+   the primary key. The key is still (cohort, classifier, rubric, soc) -- a
+   cohort scored by two classifiers is not one cohort -- but a superseded version
+   may now sit beside the current one. */
+IF INDEXPROPERTY(OBJECT_ID('score.cohort_index'), 'UX_cohort_current',
+                 'IndexID') IS NULL
+BEGIN
+    CREATE UNIQUE INDEX UX_cohort_current ON score.cohort_index
+        (cohort_name, classifier, rubric_version, soc_code)
+        WHERE is_current = 1;
+    PRINT 'Created UX_cohort_current';
 END
 GO
 

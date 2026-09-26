@@ -419,3 +419,157 @@ def test_the_cohort_query_filters_to_current_versions():
         assert "is_current = 1" in body, (
             f"{function} must filter to current versions; under append-only a "
             f"superseded row is still present")
+
+
+# ===========================================================================
+# The reference set is append-only
+# ===========================================================================
+
+def test_persist_cohort_demotes_rather_than_deletes():
+    """Two reasons, and the second is the one that makes it a design rule.
+
+    A DELETE cannot run at all under real privilege isolation: sql/04 holds
+    DENY DELETE ON SCHEMA::score TO db_fde_score, deliberately, and the original
+    delete-then-insert was only ever exercised under the developer fallback.
+
+    The deeper reason is that a percentile is a rank *within a distribution*, so
+    a figure already published in score.calibration is interpretable only
+    against the distribution it was ranked in. Deleting that distribution
+    silently changes what a stored number means. Granting DELETE would have made
+    the symptom go away and left that intact.
+    """
+    from pathlib import Path
+
+    import ast
+
+    source = Path("src/scoring/cohort.py").read_text(encoding="utf-8")
+    start = source.index("def persist_cohort")
+    body = source[start:source.index("def load_cohort")]
+
+    # The docstring explains why the DELETE was removed, so checking the raw
+    # text would fail on its own explanation. Only the SQL is inspected.
+    function = next(n for n in ast.walk(ast.parse(source))
+                    if isinstance(n, ast.FunctionDef)
+                    and n.name == "persist_cohort")
+    sql = " ".join(n.value for n in ast.walk(function)
+                   if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                   and "score.cohort_index" in n.value)
+    assert sql, "no cohort SQL found; the assertion would pass vacuously"
+
+    assert "DELETE" not in sql.upper(), (
+        "persist_cohort must not delete; db_fde_score is denied DELETE on "
+        "SCHEMA::score and a past run's percentile depends on the distribution "
+        "it was ranked in")
+    assert "is_current = 0" in body, "the previous version must be demoted"
+    assert "superseded_at" in body, "a demotion should record when"
+
+
+def test_persist_cohort_demotes_before_it_inserts():
+    """Order matters, and the failure direction was chosen.
+
+    One current row per key is enforced by a filtered unique index, so inserting
+    first would collide. Demoting first means a failure between the two
+    statements leaves the key with no current row --- which reads as "no
+    reference set" and degrades to "not identifiable", the safe direction. The
+    reverse order would leave two current rows and an ambiguous ranking.
+    """
+    from pathlib import Path
+
+    source = Path("src/scoring/cohort.py").read_text(encoding="utf-8")
+    start = source.index("def persist_cohort")
+    body = source[start:source.index("def load_cohort")]
+    assert body.index("UPDATE score.cohort_index") < body.index(
+        "INSERT INTO score.cohort_index")
+
+
+def test_load_cohort_reads_only_the_current_version():
+    """Ranking across derivations would make a percentile an artefact."""
+    from pathlib import Path
+
+    source = Path("src/scoring/cohort.py").read_text(encoding="utf-8")
+    start = source.index("def load_cohort")
+    body = source[start:start + 1400]
+    assert "is_current = 1" in body
+
+
+def test_the_schema_allows_a_superseded_version_beside_the_current_one():
+    """The uniqueness has to be filtered, or append-only is unrepresentable.
+
+    A primary key on (cohort, classifier, rubric, soc) makes a second version
+    impossible, so the migration moved the key to a surrogate and put the
+    natural key in a unique index filtered on is_current = 1. Asserted against
+    the DDL, because this is the part the Python cannot enforce.
+    """
+    from pathlib import Path
+
+    ddl = Path("sql/02_tables.sql").read_text(encoding="utf-8")
+    start = ddl.index("score.cohort_index")
+    section = ddl[start:start + 6000]
+    assert "PRIMARY KEY (cohort_index_id)" in section
+    assert "UX_cohort_current" in section
+    assert "WHERE is_current = 1" in section
+
+
+def test_the_scoring_tier_may_write_only_the_version_flag():
+    """The grant is column-scoped, so demotion does not imply revision.
+
+    db_fde_score needs to write is_current to supersede a derivation. It must
+    not thereby gain the ability to rewrite an exposure_index it already
+    published --- which is the same distinction the DENY UPDATEs on task_score,
+    role_verdict and calibration draw.
+    """
+    from pathlib import Path
+
+    grants = Path("sql/04_roles_and_permissions.sql").read_text(encoding="utf-8")
+    assert "GRANT UPDATE (is_current, superseded_at) ON score.cohort_index" in grants
+    assert "DENY DELETE ON SCHEMA::score TO db_fde_score;" in grants
+    # And no blanket UPDATE on the table, which would defeat the point.
+    assert "GRANT UPDATE ON score.cohort_index" not in grants
+
+
+def test_no_script_writes_a_hardcoded_model_name():
+    """The key that makes a mixed cohort unrepresentable can be defeated above it.
+
+    score.cohort_index is keyed on (cohort, classifier, rubric_version) so that a
+    distribution scored by two models cannot pretend to be one cohort. That
+    guarantee is only as good as the name written into it --- and
+    scripts/score_cohort.py held the literal "gpt-6-astra", so a cohort scored on
+    gpt-5.4-mini went in under astra's key. A percentile ranked inside it would
+    have been an artefact of which model scored which occupation, and nothing in
+    the schema could have said so, because the schema was satisfied.
+
+    Same for score.task_score.model, which is what attributes a figure to the
+    model that produced it: a stale literal there is a false attribution in the
+    audit record.
+
+    The names must come from config, so one switch moves them together.
+    """
+    import ast
+    from pathlib import Path
+
+    offenders: list[str] = []
+    for path in sorted(list(Path("scripts").rglob("*.py"))
+                       + list(Path("src").rglob("*.py"))):
+        if "__pycache__" in path.parts or path.name == "config.py":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        docstrings = {id(n.body[0].value) for n in ast.walk(tree)
+                      if isinstance(n, (ast.Module, ast.ClassDef, ast.FunctionDef))
+                      and n.body and isinstance(n.body[0], ast.Expr)
+                      and isinstance(n.body[0].value, ast.Constant)
+                      and isinstance(n.body[0].value.value, str)}
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Constant)
+                    and isinstance(node.value, str)
+                    and id(node) not in docstrings):
+                continue
+            text = node.value
+            # A model name, as the vendors shape them. Not a substring search
+            # for "gpt", which would fire on a URL or a price env-var name.
+            if text.startswith(("gpt-", "claude-")) and len(text) > 6:
+                offenders.append(f"{path.as_posix()}: {text}")
+
+    assert not offenders, (
+        "model names must come from config, not literals, or one profile "
+        "switch leaves them behind: " + "; ".join(offenders))
+

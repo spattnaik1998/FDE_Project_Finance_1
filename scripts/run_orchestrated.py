@@ -17,6 +17,8 @@ import sys
 
 sys.path.insert(0, "src")
 
+import config
+
 from nodes import classifier, intent, retrieval, review_gate, synthesis
 from nodes.state import NodeDeps, Phase, RunState
 from providers.accounting import Ledger
@@ -115,7 +117,12 @@ def main() -> None:
         cursor = conn.cursor()
         runner.open_run(cursor, context)
         runner.persist_scores(cursor, context, scores,
-                              model="gpt-6-astra", prompt_version=deps.prompt_version)
+                              # Not a literal: score.task_score.model is what
+                              # attributes a figure to the model that produced
+                              # it, so a stale string there is a false
+                              # attribution in the audit record.
+                              model=config.MODEL_CLASSIFIER,
+                              prompt_version=deps.prompt_version)
         runner.persist_verdict(cursor, context, verdict)
         runner.bind_sources(cursor, context, tracker.as_dict())
 

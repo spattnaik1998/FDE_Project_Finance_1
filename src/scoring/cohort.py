@@ -332,22 +332,37 @@ def persist_cohort(cursor, *, cohort_name: str, classifier: str,
                    rubric_version: str, indices: dict[str, float],
                    task_counts: dict[str, int],
                    source_run_id: str | None = None) -> int:
-    """Write or refresh the reference set for one (cohort, classifier, rubric).
+    """Write the reference set for one (cohort, classifier, rubric), append-only.
 
-    Overwrites in place rather than appending, unlike ``core.*``. That is
-    deliberate and the distinction matters: ``core`` holds *facts about the
-    world*, which must never be rewritten because a past run's evidence has to
-    stay resolvable. This table holds a *derived reference distribution* under a
-    named classifier and rubric, and the run that used it records its own
-    percentile in ``score.calibration``. Re-deriving it under the same key is
-    the same computation, not a new fact.
+    Re-deriving demotes the previous version and inserts a new one; it does not
+    overwrite. The first cut did DELETE-then-INSERT, on the reasoning that this
+    table holds a *derived* distribution rather than a fact about the world, so
+    rewriting it under the same key was the same computation rather than a new
+    claim. Two things were wrong with that.
+
+    It could not run at all under real privilege isolation: ``sql/04`` holds
+    ``DENY DELETE ON SCHEMA::score TO db_fde_score``, deliberately, and the
+    contradiction was invisible only because every connection was falling back
+    to the developer credential.
+
+    And the reasoning was wrong on its own terms. A percentile stored in
+    ``score.calibration`` is a rank *within a distribution*, so it is
+    interpretable only against the distribution it was ranked in. Deleting that
+    distribution silently changes what an already-published figure means --
+    exactly the defect the architect caught in ``core.*`` at review, in a table
+    nobody had applied the lesson to.
     """
     written = 0
     for soc_code, index in sorted(indices.items()):
+        # Demote first, so the filtered unique index (one current row per key)
+        # can never see two. A failure between the two statements leaves the key
+        # with no current row, which reads as "no reference set" and degrades to
+        # "not identifiable" -- the safe direction.
         cursor.execute("""
-            DELETE FROM score.cohort_index
-            WHERE cohort_name = ? AND classifier = ? AND rubric_version = ?
-              AND soc_code = ?""",
+            UPDATE score.cohort_index
+               SET is_current = 0, superseded_at = SYSUTCDATETIME()
+             WHERE cohort_name = ? AND classifier = ? AND rubric_version = ?
+               AND soc_code = ? AND is_current = 1""",
             cohort_name, classifier, rubric_version, soc_code)
         cursor.execute("""
             INSERT INTO score.cohort_index
@@ -365,10 +380,16 @@ def persist_cohort(cursor, *, cohort_name: str, classifier: str,
 
 def load_cohort(cursor, *, cohort_name: str = DEFAULT_COHORT,
                 classifier: str, rubric_version: str) -> dict[str, float]:
-    """Read a persisted reference set. Empty dict when none exists."""
+    """Read a persisted reference set. Empty dict when none exists.
+
+    ``is_current = 1`` because the table is append-only: a superseded version is
+    still present and ranking against a mixture of versions would make a
+    percentile an artefact of which derivation each occupation happened to get.
+    """
     rows = cursor.execute("""
         SELECT soc_code, exposure_index FROM score.cohort_index
         WHERE cohort_name = ? AND classifier = ? AND rubric_version = ?
+          AND is_current = 1
         ORDER BY soc_code""",
         cohort_name, classifier, rubric_version).fetchall()
     return {r[0]: float(r[1]) for r in rows}

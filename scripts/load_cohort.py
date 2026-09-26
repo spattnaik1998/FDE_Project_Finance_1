@@ -81,10 +81,23 @@ def read_titles() -> dict[str, str]:
 
 
 def benchmarked_socs(cursor) -> dict[str, float]:
+    """Which SOCs have a published benchmark value, read from the fact table.
+
+    Not ``dbo.VW_EXPOSURE_BENCHMARK``. The VW_* layer is the agent's scope
+    control and is granted to ``db_fde_ro`` alone; this runs as ``db_fde_load``,
+    which holds SELECT on SCHEMA::core because it is the tier that writes facts.
+    Reading the agent's view from the ingestion tier worked only while every
+    connection fell back to the developer credential, and the fix is to read the
+    fact rather than widen the view grants and blur the tiers.
+
+    ``is_current = 1`` reproduces the view's filter: under append-only
+    persistence a superseded version is still present, and counting it would
+    admit one occupation twice.
+    """
     rows = cursor.execute("""
-        SELECT SOC_Code, Percentile FROM dbo.VW_EXPOSURE_BENCHMARK
-        WHERE Measure = ? AND SOC_Code LIKE ?""", MEASURE, FAMILY + "%"
-    ).fetchall()
+        SELECT soc_code, percentile FROM core.exposure_estimate
+        WHERE measure = ? AND is_current = 1 AND soc_code LIKE ?""",
+        MEASURE, FAMILY + "%").fetchall()
     return {r[0]: float(r[1]) for r in rows if r[1] is not None}
 
 

@@ -220,6 +220,89 @@ def test_no_tool_references_a_base_table_in_its_sql():
     assert not offenders, f"tool SQL touches base tables: {offenders}"
 
 
+def test_only_the_agent_credential_reads_the_agent_views():
+    """The inverse of the test above, and it has caught three real defects.
+
+    ``ALLOWED_VIEWS`` stops the agent reading a fact table. Nothing stopped the
+    other direction: a scoring or ingestion module reading ``dbo.VW_*``, which is
+    granted to ``db_fde_ro`` alone. Those worked for as long as every connection
+    fell back to the developer credential, then failed on the first run under
+    real isolation --- ``scoring/cohort.py``, then ``scripts/score_cohort.py``
+    and ``scripts/load_cohort.py``, which this test would have caught together
+    instead of one failure at a time.
+
+    The property asserted is the sharp one, not "only the tool surface may name a
+    view". ``nodes/intent.py`` legitimately reads ``VW_ROLE_TASKS`` for the scope
+    catalogue and connects as ``READ_ONLY`` to do it. What must not happen is a
+    module holding the LOAD or SCORE credential reading the agent's views: the
+    views are the *agent's* scope control, and a tier that legitimately holds
+    SELECT on SCHEMA::core should read the fact. The tempting fix each time was
+    to grant the view to the other role, which would dissolve the distinction the
+    view layer exists to draw.
+    """
+    import ast
+    from pathlib import Path
+
+    offenders: list[str] = []
+    for path in sorted(list(Path("src").rglob("*.py"))
+                       + list(Path("scripts").rglob("*.py"))):
+        if "__pycache__" in path.parts:
+            continue
+        source = path.read_text(encoding="utf-8")
+        views = [q for q in _sql_constants(ast.parse(source))
+                 if "dbo.VW_" in q]
+        if not views:
+            continue
+        for principal in ("Principal.LOAD", "Principal.SCORE"):
+            if principal in source:
+                offenders.append(f"{path.as_posix()} holds {principal}")
+
+    assert not offenders, (
+        "these modules read the agent's views while holding a writing tier's "
+        "credential; read the fact table instead: " + "; ".join(offenders))
+
+
+def test_that_inverse_check_can_actually_fail(tmp_path):
+    """Guards the test above against passing because it inspects nothing.
+
+    A structural check whose file scan silently matches zero files reports
+    success forever. This asserts the two halves it depends on: that view SQL is
+    found at all, and that a docstring naming a view is not mistaken for it.
+    """
+    import ast
+    from pathlib import Path
+
+    found = any("dbo.VW_" in text
+                for text in _sql_constants(ast.parse(
+                    Path("src/nodes/intent.py").read_text(encoding="utf-8"))))
+    assert found, "no view SQL found anywhere; the inverse check is vacuous"
+
+
+def _sql_constants(tree):
+    """String constants that are SQL, excluding every docstring.
+
+    Docstrings are excluded because this project's prose names the views
+    constantly --- an earlier cut of the test above fired on its own explanatory
+    docstring, which is how a structural test gets switched off. Shared by both
+    tests so there is one rule for what counts as SQL.
+    """
+    import ast
+
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                             ast.AsyncFunctionDef)):
+            first = node.body[0] if node.body else None
+            if (isinstance(first, ast.Expr)
+                    and isinstance(first.value, ast.Constant)
+                    and isinstance(first.value.value, str)):
+                docstrings.add(id(first.value))
+    return [n.value for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            and id(n) not in docstrings
+            and "SELECT" in n.value.upper() and "FROM" in n.value.upper()]
+
+
 # ===========================================================================
 # get_tasks
 # ===========================================================================
