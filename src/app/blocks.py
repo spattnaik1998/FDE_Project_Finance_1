@@ -23,7 +23,8 @@ from app.view_model import ReportView
 # a programming error and the dispatcher raises rather than silently skipping,
 # because a silently dropped block is a figure the customer never saw.
 KINDS = ("title", "caption", "heading", "markdown", "callout", "metrics",
-         "table", "divider", "expander", "download", "request_form")
+         "table", "divider", "expander", "download", "request_form",
+         "style", "figure", "span", "standing")
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,40 @@ def _b(kind, payload=None, **meta) -> Block:
 # ---------------------------------------------------------------------------
 # Sections
 # ---------------------------------------------------------------------------
+
+def _figure(label: str, value: str, note: str = "",
+            fill_percent: str | None = None) -> Block:
+    """A bounded figure: label, large mono value, optional meter.
+
+    Used for exposure, which runs 0 to 1 and therefore has a track to sit in.
+    ``fill_percent`` arrives pre-computed as a string -- this module does no
+    arithmetic, by rule.
+    """
+    return _b("figure", {"label": label, "value": value, "note": note,
+                         "fill": fill_percent})
+
+
+def _span(label: str, low: str, mid: str, high: str, note: str = "") -> Block:
+    """An unbounded interval: two ticks and a median, deliberately no track.
+
+    Used for the lag. Giving it the same meter as exposure would invite the one
+    comparison the architecture refuses to make -- the two are different
+    quantities on different scales, and the visual grammar says so.
+    """
+    return _b("span", {"label": label, "low": low, "mid": mid, "high": high,
+                       "note": note})
+
+
+def _standing(tone: str, tag: str, body: str) -> Block:
+    """The run's standing as a stamp: a coloured rule and a line of text.
+
+    Not a filled banner. "Analyst review required" is a finding, and a finding
+    rendered as a hazard strip reads as a defect -- a client discounts
+    everything printed under it. A hairline rule in dark ochre reads as rigour
+    and keeps the fact fully visible, which is the point.
+    """
+    return _b("standing", {"tone": tone, "tag": tag, "body": body})
+
 
 def request_form_blocks(occupations, default_question: str,
                         cost) -> list[Block]:
@@ -66,11 +101,6 @@ def request_form_blocks(occupations, default_question: str,
            "Ask in your own words. The orchestration tier resolves the "
            "occupation itself and **halts rather than substituting a similar "
            "one** if the warehouse does not publish it."),
-        _b("callout",
-           f"A run issues about **{cost.calls} model calls** and "
-           f"**{cost.tokens:,} tokens**, and takes **{cost.duration_text}**. "
-           f"The page will block until it finishes.",
-           tone="warn"),
         _b("request_form", {
             "default_question": default_question,
             "label": "Which cost lines do you want assessed?",
@@ -82,7 +112,10 @@ def request_form_blocks(occupations, default_question: str,
                "correctly refused rather than approximated."),
             _b("table", {"columns": ["Occupation", "SOC", "Tasks"],
                          "rows": rows}),
-        ], label=f"In scope right now ({len(rows)} occupations)"),
+            _b("caption",
+               f"Each run issues about {cost.calls} model calls and "
+               f"{cost.tokens:,} tokens, and takes {cost.duration_text}."),
+        ], label=f"Coverage and run cost ({len(rows)} occupations in scope)"),
         _b("divider"),
     ]
 
@@ -126,11 +159,18 @@ def standing_blocks(view: ReportView) -> list[Block]:
     standing = view.standing
     blocks = [
         _b("heading", "1. Standing of this analysis"),
-        _b("callout", f"**{standing.headline}**\n\n{standing.meaning}",
-           tone=standing.tone),
+        # A stamp, not a filled banner. "Analyst review required" is a finding;
+        # rendered as a hazard strip it reads as a defect and a client discounts
+        # everything printed beneath it. A hairline rule in dark ochre keeps the
+        # fact fully visible and reads as rigour.
+        _standing(standing.tone, standing.headline, standing.meaning),
     ]
+    # The reason moves behind a disclosure. It is three sentences of statistical
+    # argument -- essential, and the wrong thing to place between a client and
+    # the figure they came for. The standing itself stays on the page.
     if standing.reason:
-        blocks.append(_b("markdown", f"**Why.** {standing.reason}"))
+        blocks.append(_b("expander", [_b("markdown", standing.reason)],
+                         label="Why calibration could not adjudicate this"))
 
     if view.unverified_mirrors:
         names = ", ".join(f"`{s.doc_id}`" for s in view.unverified_mirrors)
@@ -153,12 +193,11 @@ def standing_blocks(view: ReportView) -> list[Block]:
 def exposure_blocks(view: ReportView) -> list[Block]:
     return [
         _b("heading", "2. Exposure"),
-        _b("metrics", [
-            {"label": "Role exposure index", "value": view.exposure_index,
-             "help": "0 = no task exposed, 1 = every task fully exposed"},
-            {"label": "Tasks scored", "value": view.tasks_scored},
-            {"label": "Weighting", "value": view.weight_source},
-        ]),
+        # A bounded figure with a track, because the index runs 0 to 1.
+        _figure("Role exposure index", view.exposure_index,
+                note=f"Bounded 0 to 1 · {view.tasks_scored} tasks · "
+                     f"{view.weight_source} weighting",
+                fill_percent=view.exposure_percent),
         _b("markdown",
            "Exposure measures how much of the role's task content a language "
            "model could in principle perform. It is **not** a probability of "
@@ -171,11 +210,11 @@ def exposure_blocks(view: ReportView) -> list[Block]:
 def lag_blocks(view: ReportView) -> list[Block]:
     return [
         _b("heading", "3. Adoption lag"),
-        _b("metrics", [
-            {"label": "p10 (years)", "value": view.lag_p10},
-            {"label": "p50 (years)", "value": view.lag_p50},
-            {"label": "p90 (years)", "value": view.lag_p90},
-        ]),
+        # A span with no track, deliberately unlike exposure's meter. The lag is
+        # an unbounded interval in years; giving it the same gauge would invite
+        # the one comparison this architecture refuses to make.
+        _span("Years to reorganisation", view.lag_p10, view.lag_p50,
+              view.lag_p90, note="p10 / median / p90 · no curve fitted"),
         _b("markdown",
            "**Computed independently of the exposure index.** The lag path "
            "reads adoption observations and historical diffusion claims; it "
@@ -363,9 +402,23 @@ def displayed_strings(blocks: list[Block]) -> list[str]:
                 else:
                     out.append(str(item))
         elif isinstance(payload, dict):
+            # Tables first, then EVERY other value in the payload.
+            #
+            # This used to read only columns and rows, which meant the figure,
+            # span and standing blocks -- whose values live under other keys --
+            # were invisible to it. That would have made
+            # test_the_ui_displays_no_figure_the_view_model_did_not_carry pass
+            # vacuously for exactly the blocks that now carry the headline
+            # numbers. A traceability check that cannot see the figures is
+            # worse than none, because it reports success.
             out.extend(str(c) for c in payload.get("columns", []))
             for row in payload.get("rows", []):
                 out.extend(str(cell) for cell in row)
+            for key, value in payload.items():
+                if key in ("columns", "rows"):
+                    continue
+                if isinstance(value, (str, int, float)):
+                    out.append(str(value))
         for value in block.meta.values():
             out.append(str(value))
     return out

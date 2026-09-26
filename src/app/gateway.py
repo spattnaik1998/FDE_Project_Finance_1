@@ -99,6 +99,27 @@ def _standing(data: ReportData) -> StandingView:
                         tone=TONE.get(data.status, "warn"), reason=reason)
 
 
+def _presentation_forms(data: ReportData) -> frozenset[str]:
+    """The same provenanced quantities, re-expressed for the view.
+
+    The exposure meter needs its index as a CSS percentage. That is the same
+    figure in another unit, not a new one -- it is derived from
+    ``score.role_verdict.exposure_index``, which the registry already traced to
+    a hashed artefact.
+
+    It is added to the traced set rather than exempted from the scan. The
+    alternative was to teach the traceability check to ignore "style" keys, and
+    an exemption list is exactly how a figure with no source eventually slips
+    onto a page.
+    """
+    forms: set[str] = set()
+    try:
+        forms.add(f"{float(data.exposure_index) * 100:.1f}%")
+    except (TypeError, ValueError):
+        pass
+    return frozenset(forms)
+
+
 def _figure_literals(registry) -> frozenset[str]:
     """Every literal the report legitimately produced.
 
@@ -187,7 +208,7 @@ def _to_view(data: ReportData, registry, trace, markdown: str) -> ReportView:
         calibration_policy_version=data.calibration_policy_version,
         is_customer_deliverable=data.is_customer_deliverable,
 
-        figures=_figure_literals(registry),
+        figures=_figure_literals(registry) | _presentation_forms(data),
         markdown=markdown,
     )
 
@@ -272,7 +293,7 @@ def submit(request, *, database: str | None = None) -> "SubmissionResult":
                          "does not publish, so no analysis was produced."),
                 in_scope_hint=hint),
             calls=spend["calls"], tokens=spend["total_tokens"],
-            duration_ms=spend["duration_ms"])
+            provider_time_ms=spend["provider_time_ms"])
 
     if state.verdict is None:
         return SubmissionResult(
@@ -284,11 +305,11 @@ def submit(request, *, database: str | None = None) -> "SubmissionResult":
                          f"{'; '.join(state.errors) or 'No error was recorded.'}"),
             ),
             calls=spend["calls"], tokens=spend["total_tokens"],
-            duration_ms=spend["duration_ms"])
+            provider_time_ms=spend["provider_time_ms"])
 
     LOG.info("submit accepted run=%s status=%s calls=%s",
              outcome.context.run_id, outcome.status, spend["calls"])
     return SubmissionResult(
         accepted=True, run_id=outcome.context.run_id, status=outcome.status,
         calls=spend["calls"], tokens=spend["total_tokens"],
-        duration_ms=spend["duration_ms"])
+        provider_time_ms=spend["provider_time_ms"])

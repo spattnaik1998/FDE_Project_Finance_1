@@ -137,6 +137,19 @@ class ReportView:
         return tuple(s for s in self.sources if s.is_unverified_mirror)
 
     @property
+    def exposure_percent(self) -> str:
+        """The index as a CSS width, so the view layer does no arithmetic.
+
+        Computed here rather than in blocks.py, which is forbidden from
+        arithmetic: a presentation layer that can compute can produce a figure
+        that is on no source.
+        """
+        try:
+            return f"{float(self.exposure_index) * 100:.1f}%"
+        except (TypeError, ValueError):
+            return "0%"
+
+    @property
     def lag_interval(self) -> str:
         return f"{self.lag_p10} – {self.lag_p90} years (median {self.lag_p50})"
 

@@ -34,6 +34,7 @@ import streamlit as st
 
 from app import blocks as blocks_module
 from app.contract import RefusalReason, RunCost, RunRequest
+from app.style import STYLESHEET
 from app.gateway import (NoRunAvailable, available_runs, in_scope_occupations,
                          load_view, submit)
 from app.view_model import ReportView
@@ -80,6 +81,35 @@ def render_block(block: blocks_module.Block) -> None:
         with st.expander(meta.get("label", "Details")):
             for inner in payload:
                 render_block(inner)
+    elif kind == "style":
+        st.markdown(payload, unsafe_allow_html=True)
+    elif kind == "figure":
+        meter = (f'<div class="meter"><i style="width:{payload["fill"]}"></i></div>'
+                 if payload.get("fill") else "")
+        note = (f'<div class="fig-note">{payload["note"]}</div>'
+                if payload.get("note") else "")
+        st.markdown(
+            f'<div class="fig-label">{payload["label"]}</div>'
+            f'<div class="fig">{payload["value"]}</div>{meter}{note}',
+            unsafe_allow_html=True)
+    elif kind == "span":
+        note = (f'<div class="fig-note">{payload["note"]}</div>'
+                if payload.get("note") else "")
+        st.markdown(
+            f'<div class="fig-label">{payload["label"]}</div>'
+            f'<div class="span-rule">'
+            f'<span class="tick">{payload["low"]}</span>'
+            f'<span class="dash"></span>'
+            f'<span class="mid">median {payload["mid"]}</span>'
+            f'<span class="dash"></span>'
+            f'<span class="tick">{payload["high"]}</span>'
+            f'</div>{note}', unsafe_allow_html=True)
+    elif kind == "standing":
+        st.markdown(
+            f'<div class="standing {payload["tone"]}">'
+            f'<div class="tag">{payload["tag"]}</div>'
+            f'<div class="body">{payload["body"]}</div></div>',
+            unsafe_allow_html=True)
     elif kind == "request_form":
         # The request half of the TDD 1.1 contract. Collects a question and
         # nothing else; scope resolution belongs to the Intent & Scope node.
@@ -168,7 +198,9 @@ def _run_pending_request() -> str | None:
 
 
 def main() -> None:
-    st.set_page_config(page_title=PAGE_TITLE, layout="wide")
+    st.set_page_config(page_title=PAGE_TITLE, layout="wide",
+                       initial_sidebar_state="collapsed")
+    st.markdown(STYLESHEET, unsafe_allow_html=True)
 
     fresh_run_id = _run_pending_request()
 

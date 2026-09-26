@@ -21,7 +21,9 @@ Three behaviours worth naming:
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
+import config
 from nodes import prompts, retrieval
 from nodes.state import NodeDeps, Phase, RunState
 from providers.base import CallContext, ModelRefused, ProviderError, SchemaViolation
@@ -148,8 +150,36 @@ def run(state: RunState, deps: NodeDeps) -> RunState:
         return state.fail(Phase.FAILED, "Classifier ran with no tasks retrieved.")
 
     claims = retrieval.claims_for_classifier(state)
-    state.classifications = [
-        classify_one(task, state, deps, claims) for task in state.evidence.tasks]
+    tasks = list(state.evidence.tasks)
+
+    # Classified concurrently, in bounded fashion.
+    #
+    # One call per task, run sequentially, was the entire reason a run took
+    # three minutes: 26 tasks x ~7s of provider latency, all of it waiting. The
+    # calls are independent -- each task is classified on its own statement plus
+    # the shared claim set -- so nothing about the analysis requires them to be
+    # serial.
+    #
+    # Bounded rather than unbounded. A 231-call cohort build exhausted the
+    # OpenAI quota earlier in this project, so the worker count is deliberately
+    # modest and configurable. The provider adapters already retry 429s with
+    # backoff; concurrency raises the chance of hitting them, and the ceiling is
+    # what keeps that recoverable instead of a stampede.
+    #
+    # executor.map preserves input order, which matters more than it looks:
+    # task_id order determines score order, and a reordered result set would
+    # change nothing about the index but everything about which rationale sits
+    # beside which task.
+    workers = max(1, min(config.CLASSIFIER_CONCURRENCY, len(tasks)))
+    if workers == 1:
+        state.classifications = [classify_one(task, state, deps, claims)
+                                 for task in tasks]
+    else:
+        with ThreadPoolExecutor(max_workers=workers,
+                                thread_name_prefix="classify") as pool:
+            state.classifications = list(pool.map(
+                lambda task: classify_one(task, state, deps, claims), tasks))
+
     state.phase = Phase.CLASSIFIED
 
     unclear = sum(1 for c in state.classifications

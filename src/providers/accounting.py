@@ -21,6 +21,7 @@ that excludes them.
 from __future__ import annotations
 
 import logging
+import threading
 import os
 import re
 from dataclasses import dataclass, field
@@ -86,6 +87,13 @@ class Ledger:
 
     run_id: str | None = None
     calls: list[ModelCall] = field(default_factory=list)
+    # The classifier fans out across threads, so several calls can land at once.
+    # list.append happens to be atomic under CPython's GIL, but relying on an
+    # implementation detail for an accounting record is the kind of thing that
+    # is fine until it is not. The lock costs nothing and makes the guarantee
+    # explicit rather than incidental.
+    _lock: "threading.Lock" = field(default_factory=lambda: threading.Lock(),
+                                    repr=False, compare=False)
 
     def record(self, response: ModelResponse, *, stage: str,
                prompt_version: str = "v1", status: str = "ok") -> ModelCall:
@@ -94,7 +102,8 @@ class Ledger:
             prompt_version=prompt_version, usage=response.usage,
             duration_ms=response.duration_ms,
             cost_usd=cost_usd(response.model, response.usage), status=status)
-        self.calls.append(call)
+        with self._lock:
+            self.calls.append(call)
         return call
 
     # -- aggregates --------------------------------------------------------
@@ -119,7 +128,21 @@ class Ledger:
 
     @property
     def total_duration_ms(self) -> int:
+        """Summed provider time across calls -- NOT elapsed wall clock.
+
+        Named precisely because the difference misled a decision. With the
+        classifier running concurrently, 26 calls of ~6s each still sum to ~160s
+        while the run finishes in under 40, so reporting this as "duration" made
+        a 5x speed-up look like no change at all. It is a useful number -- it is
+        what the provider billed time against -- but it is not how long anyone
+        waited.
+        """
         return sum(c.duration_ms for c in self.calls)
+
+    @property
+    def max_duration_ms(self) -> int:
+        """The slowest single call, a lower bound on any run's wall clock."""
+        return max((c.duration_ms for c in self.calls), default=0)
 
     def by_stage(self) -> dict[str, Usage]:
         out: dict[str, Usage] = {}
@@ -138,7 +161,10 @@ class Ledger:
             "cached_input_tokens": usage.cached_input_tokens,
             "reasoning_tokens": usage.reasoning_tokens,
             "total_tokens": usage.total_tokens,
-            "duration_ms": self.total_duration_ms,
+            # Renamed from "duration_ms": it is summed provider time, not
+            # elapsed time, and the old name invited exactly the wrong reading.
+            "provider_time_ms": self.total_duration_ms,
+            "slowest_call_ms": self.max_duration_ms,
             "cost_usd": cost,
             "cost_status": "complete" if cost is not None else (
                 "unpriced_models: " + ", ".join(sorted(self.unpriced_models))

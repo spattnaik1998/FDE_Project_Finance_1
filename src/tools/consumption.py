@@ -18,6 +18,7 @@ nothing.
 from __future__ import annotations
 
 import logging
+import threading
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
@@ -47,15 +48,22 @@ class ConsumptionTracker:
     run_id: str | None = None
     _consumed: dict[UsageType, set[str]] = field(
         default_factory=lambda: defaultdict(set))
+    # Guarded because the classifier fans out across threads and several tools
+    # can register consumption concurrently. A binding that loses a source under
+    # load would make a figure untraceable, which is the one failure this whole
+    # structure exists to prevent.
+    _lock: "threading.Lock" = field(default_factory=lambda: threading.Lock(),
+                                    repr=False, compare=False)
 
     def record(self, usage: UsageType, doc_ids) -> int:
         """Register source documents as consumed. Returns how many were new."""
         if isinstance(doc_ids, str):
             doc_ids = [doc_ids]
         incoming = {d for d in doc_ids if d}
-        before = len(self._consumed[usage])
-        self._consumed[usage] |= incoming
-        added = len(self._consumed[usage]) - before
+        with self._lock:
+            before = len(self._consumed[usage])
+            self._consumed[usage] |= incoming
+            added = len(self._consumed[usage]) - before
         if added:
             LOG.info("run_id=%s usage=%s status=consumed new=%s total=%s",
                      self.run_id, usage.value, added, len(self._consumed[usage]))

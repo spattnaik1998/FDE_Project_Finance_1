@@ -39,8 +39,12 @@ from pydantic import BaseModel, Field, field_validator
 # the customer before they spend it, because a button that quietly issues 28
 # model calls is not a button anyone should trust.
 TYPICAL_CALLS = 28
-TYPICAL_TOKENS = 30_900
-TYPICAL_SECONDS = 190
+TYPICAL_TOKENS = 31_100
+# Wall clock, measured -- 39s on the run that set this figure. It was ~190s
+# until the classifier stopped issuing its 26 calls one at a time. Stated as
+# elapsed time rather than summed provider time, which is ~160s and is what
+# made the speed-up invisible in the ledger for a while.
+TYPICAL_SECONDS = 40
 
 
 class RunCost(BaseModel):
@@ -55,7 +59,7 @@ class RunCost(BaseModel):
 
     calls: int = TYPICAL_CALLS
     tokens: int = TYPICAL_TOKENS
-    duration_text: str = "about 3 minutes"
+    duration_text: str = "under a minute"
 
     model_config = {"frozen": True}
 
@@ -130,7 +134,9 @@ class SubmissionResult(BaseModel):
     refusal: RefusalReason | None = None
     calls: int = 0
     tokens: int = 0
-    duration_ms: int = 0
+    # Summed provider time, not elapsed. Named on the contract the way the
+    # ledger names it, so a consumer cannot mistake it for how long they waited.
+    provider_time_ms: int = 0
 
     model_config = {"frozen": True}
 

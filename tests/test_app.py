@@ -97,7 +97,12 @@ def _view(**overrides) -> ReportView:
         figures=frozenset({"0.380", "26", "5.0", "10.1", "30.0", "86.82",
                            "14", "0", "12", "0.900", "0.250", "0.675",
                            "0.550", "0.247", "29.9%", "36.5%", "21", "25",
-                           "164", "523", "52"}),
+                           "164", "523", "52",
+                           # The exposure meter's width: the same provenanced
+                           # index in another unit. The gateway adds it via
+                           # _presentation_forms, so the fixture has to model
+                           # that or this set stops describing a real view.
+                           "38.0%"}),
         markdown="# report\n")
     base.update(overrides)
     return ReportView(**base)
@@ -318,16 +323,37 @@ def test_the_standing_is_the_first_thing_after_the_header():
     assert "title" in kinds
 
 
-def test_the_standing_callout_carries_the_tone():
-    for status, tone, renderer in (("passed", "ok", "success"),
-                                   ("review_required", "warn", "warning"),
-                                   ("gate_rejected", "stop", "error")):
-        view = _view(standing=StandingView("H", "M", tone))
-        callouts = [b for b in page(view) if b.kind == "callout"]
-        assert callouts
-        assert callouts[0].meta["tone"] == tone
-        from app.streamlit_app import TONE_RENDERER
-        assert TONE_RENDERER[tone] == renderer
+def test_the_standing_stamp_carries_the_tone():
+    """The standing is a stamp, not a filled banner -- but still tone-carrying.
+
+    It moved off st.warning deliberately: a finding rendered as a hazard strip
+    reads as a defect, and a client discounts everything printed beneath it.
+    What must not change is that the standing is on the page and that its
+    severity is encoded, so this asserts the stamp rather than the old callout.
+    """
+    for tone in ("ok", "warn", "stop"):
+        view = _view(standing=StandingView("HEADLINE", "Meaning.", tone))
+        stamps = [b for b in page(view) if b.kind == "standing"]
+
+        assert stamps, "the standing must still render"
+        assert stamps[0].payload["tone"] == tone
+        assert stamps[0].payload["tag"] == "HEADLINE"
+        assert stamps[0].payload["body"] == "Meaning."
+
+
+def test_the_standing_is_never_hidden_whatever_the_tone():
+    """A gated or uncalibrated run must say so on the page, not behind a click.
+
+    The explanatory argument is allowed to move into a disclosure; the standing
+    itself is not. This is the line between presenting a finding well and
+    suppressing it.
+    """
+    for tone, headline in (("warn", "NOT YET CALIBRATED"),
+                           ("stop", "REJECTED — DO NOT USE")):
+        view = _view(standing=StandingView(headline, "Meaning.", tone))
+        top_level = [b for b in page(view) if b.kind == "standing"]
+        assert top_level, f"{tone} standing was not rendered at top level"
+        assert headline in " ".join(displayed_strings(page(view)))
 
 
 def test_an_uncalibrated_run_explains_why_on_the_page():
@@ -624,12 +650,20 @@ def test_the_app_offers_the_request_form_above_the_report(executed_app):
         i for i, h in enumerate(headings) if h.startswith("1. Standing"))
 
 
-def test_the_app_renders_the_headline_metrics(executed_app):
-    """Metrics must actually appear, not just be constructed."""
+def test_the_app_renders_the_headline_figures(executed_app):
+    """Exposure and lag are rendered as typography now, not as metric tiles.
+
+    They moved off st.metric so the two can carry different visual grammar --
+    exposure is bounded and gets a track, the lag is an unbounded interval and
+    deliberately does not. So they appear in markdown rather than in the metric
+    list, and the provenance metrics stay as tiles.
+    """
+    rendered = " ".join(m.value for m in executed_app.markdown)
+    for expected in ("Role exposure index", "Years to reorganisation"):
+        assert expected in rendered, f"{expected} did not render"
+
     labels = [m.label for m in executed_app.metric]
-    for expected in ("Role exposure index", "Tasks scored", "p10 (years)",
-                     "p50 (years)", "p90 (years)", "Figures traced"):
-        assert expected in labels, f"{expected} metric missing from {labels}"
+    assert "Figures traced" in labels
 
 
 def test_the_app_renders_the_tables(executed_app):
@@ -637,12 +671,20 @@ def test_the_app_renders_the_tables(executed_app):
     assert len(executed_app.dataframe) >= 2
 
 
-def test_the_app_warns_rather_than_errors_on_an_uncalibrated_run(executed_app):
-    """review_required is a warning, not an error: the analysis still stands."""
-    warnings = " ".join(w.value for w in executed_app.warning)
-    assert warnings, "an uncalibrated run should raise a visible warning"
-    assert "NOT YET CALIBRATED" in warnings or "mirror" in warnings.lower()
-    assert len(executed_app.error) == 0
+def test_an_uncalibrated_run_states_its_standing_without_alarming(executed_app):
+    """Visible, and not styled as a failure.
+
+    The earlier version required a st.warning banner. That banner was the
+    problem: an uncalibrated run is a finding, and a hazard strip made a
+    correct result look like a broken one. The standing is now a hairline stamp
+    -- so the assertion is that the text is on the page and that nothing is
+    rendered as an error.
+    """
+    rendered = " ".join(m.value for m in executed_app.markdown)
+
+    assert "NOT YET CALIBRATED" in rendered or "CALIBRATED" in rendered, (
+        "the run's standing must appear on the page")
+    assert len(executed_app.error) == 0, [e.value for e in executed_app.error]
 
 
 def test_the_app_does_not_render_our_percentile_when_unidentifiable(
@@ -784,8 +826,9 @@ def test_the_request_form_renders_without_arithmetic():
 
     kinds = [b.kind for b in page]
     assert "request_form" in kinds
-    assert "callout" in kinds                      # the cost warning
     text = " ".join(displayed_strings(page))
+    # Cost is operational detail, not a finding, so it sits inside the coverage
+    # disclosure rather than as the first thing a client reads.
     assert "model calls" in text
     assert "13-2051.00" in text                    # in-scope list is shown
 
@@ -803,7 +846,8 @@ def test_the_in_scope_list_is_shown_before_a_run_is_offered():
                     "tasks": 11}]
     page = request_form_blocks(occupations, "q", RunCost())
     labels = [b.meta.get("label", "") for b in page if b.kind == "expander"]
-    assert any("In scope" in label for label in labels)
+    assert any("in scope" in label.lower() for label in labels)
+    assert any("Credit Analysts" in t for t in displayed_strings(page))
 
 
 def test_a_refusal_renders_as_an_answer_not_a_crash():

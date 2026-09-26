@@ -1,0 +1,29 @@
+# Presentation theme.
+#
+# Light by deliberate choice, not preference: this reads as a research note for a
+# finance desk, and the default dark canvas made it look like a developer tool.
+#
+# The palette is cool rather than warm -- a cool off-white paper against
+# blue-cast ink -- because the warm-cream-and-terracotta combination has become
+# the house style of generated interfaces, and this needs to look like it came
+# from an institution rather than from a template.
+#
+# Status colours are deliberately TEXT-WEIGHT and dark, never fluorescent fills.
+# "Analyst review required" is a finding, and a finding rendered as a hazard
+# banner reads as a defect. Dark ochre on paper reads as rigour.
+
+[theme]
+base = "light"
+primaryColor = "#16414E"               # archival teal: links, focus, primary action
+backgroundColor = "#F7F8FA"            # cool paper
+secondaryBackgroundColor = "#EEF1F5"   # panels, table headers
+textColor = "#141922"                  # ink, blue-cast near-black
+font = "sans serif"
+
+[server]
+headless = true
+address = "127.0.0.1"
+port = 8501
+
+[browser]
+gatherUsageStats = false

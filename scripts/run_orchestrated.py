@@ -185,7 +185,8 @@ def main() -> None:
 
     spend = ledger.summary()
     print(f"  SPEND  {spend['calls']} model calls, "
-          f"{spend['total_tokens']:,} tokens, {spend['duration_ms']:,} ms")
+          f"{spend['total_tokens']:,} tokens, "
+          f"{spend['provider_time_ms']:,} ms of provider time")
     print(f"    cost: {spend['cost_status']}")
     for stage, usage in ledger.by_stage().items():
         print(f"    {stage:18s} {usage.total_tokens:>8,} tokens")

@@ -203,6 +203,15 @@ MODEL_REVIEW_GATE = os.environ.get("MODEL_REVIEW_GATE", "claude-opus-5")
 # Valid for gpt-6-astra: low | medium | high | xhigh. Default is medium.
 REASONING_EFFORT = os.environ.get("REASONING_EFFORT", "medium")
 
+# How many task classifications may be in flight at once.
+#
+# The classifier issues one call per task and they are independent, so running
+# them serially was pure latency -- 26 tasks x ~7s. Six is deliberately modest:
+# a 231-call cohort build exhausted the provider quota earlier in this project,
+# and the adapters' 429 backoff recovers from a brush with the limit far better
+# than from a stampede into it. Raise it only with the rate limit in view.
+CLASSIFIER_CONCURRENCY = int(os.environ.get("CLASSIFIER_CONCURRENCY", "6"))
+
 
 # ---------------------------------------------------------------------------
 # Redaction

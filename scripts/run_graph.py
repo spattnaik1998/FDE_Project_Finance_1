@@ -106,7 +106,8 @@ def main() -> None:
 
     spend = outcome.ledger.summary()
     print(f"\n  SPEND  {spend['calls']} model calls, "
-          f"{spend['total_tokens']:,} tokens, {spend['duration_ms']:,} ms")
+          f"{spend['total_tokens']:,} tokens, "
+          f"{spend['provider_time_ms']:,} ms of provider time")
     print(f"    cost: {spend['cost_status']}")
 
     if state.narrative:
