@@ -195,13 +195,68 @@ ANTHROPIC_VERSION = "2023-06-01"
 # The split is intentional. Intent/Scope and the Review Gate run on Anthropic so
 # the gate grading the classifier's work is a different model from the one that
 # produced it -- a mild independence property that a single-provider setup loses.
-MODEL_CLASSIFIER = os.environ.get("MODEL_CLASSIFIER", "gpt-6-astra")
-MODEL_WRITER = os.environ.get("MODEL_WRITER", "gpt-6-astra")
+# --------------------------------------------------------------------------
+# Model profiles
+#
+# Two named sets, because the choice is really one decision made four times and
+# a half-switched configuration is worse than either profile: an economy
+# classifier feeding a full-price writer saves little and is hard to reason
+# about afterwards.
+#
+#   full     -- what a customer-deliverable run uses. gpt-6-astra at medium
+#               reasoning effort on both OpenAI stages.
+#   economy  -- for development, tests and rehearsal. gpt-5.4-mini at low
+#               effort. Established by probing the live API with this project's
+#               own classifier schema, not from documentation: strict
+#               json_schema on /v1/responses works, and the call returned a
+#               valid classification in ~2.3s against astra's ~6.8s.
+#
+# The token *count* per call is almost identical (480 in / ~170 out either
+# way) -- the schema fixes the shape of the answer, so a smaller model does not
+# write less. The saving is price per token and latency, and this comment says
+# so rather than letting "economy" imply fewer tokens than it delivers.
+#
+# One consequence, stated here because it is easy to trip over: the cohort
+# reference set is keyed on (cohort, classifier, rubric_version). A run under
+# `economy` will not find the reference set built under `gpt-6-astra`, so its
+# calibration degrades to "not identifiable" until the cohort is re-scored on
+# the same model. That is the key doing its job -- ranking our index against a
+# distribution some other model produced would not be a comparison -- but it
+# does mean the profiles are not interchangeable mid-analysis.
+# --------------------------------------------------------------------------
+
+MODEL_PROFILES = {
+    "full": {"classifier": "gpt-6-astra", "writer": "gpt-6-astra",
+             "effort": "medium"},
+    "economy": {"classifier": "gpt-5.4-mini", "writer": "gpt-5.4-mini",
+                "effort": "low"},
+}
+
+MODEL_PROFILE = os.environ.get("MODEL_PROFILE", "economy")
+if MODEL_PROFILE not in MODEL_PROFILES:
+    raise ValueError(
+        f"MODEL_PROFILE must be one of {sorted(MODEL_PROFILES)}; got "
+        f"{MODEL_PROFILE!r}. An unrecognised profile is not defaulted, because "
+        f"silently running the expensive one is the costly mistake.")
+
+_PROFILE = MODEL_PROFILES[MODEL_PROFILE]
+
+# A per-stage variable still wins over the profile, so a single stage can be
+# raised for one investigation without editing the profiles.
+MODEL_CLASSIFIER = os.environ.get("MODEL_CLASSIFIER", _PROFILE["classifier"])
+MODEL_WRITER = os.environ.get("MODEL_WRITER", _PROFILE["writer"])
 MODEL_ORCHESTRATOR = os.environ.get("MODEL_ORCHESTRATOR", "claude-opus-5")
 MODEL_REVIEW_GATE = os.environ.get("MODEL_REVIEW_GATE", "claude-opus-5")
 
-# Valid for gpt-6-astra: low | medium | high | xhigh. Default is medium.
-REASONING_EFFORT = os.environ.get("REASONING_EFFORT", "medium")
+# Valid for the reasoning models: low | medium | high | xhigh.
+REASONING_EFFORT = os.environ.get("REASONING_EFFORT", _PROFILE["effort"])
+
+
+def model_profile_summary() -> str:
+    """One line naming the profile in force, for logs and run notes."""
+    return (f"profile={MODEL_PROFILE} classifier={MODEL_CLASSIFIER} "
+            f"writer={MODEL_WRITER} effort={REASONING_EFFORT}")
+
 
 # How many task classifications may be in flight at once.
 #

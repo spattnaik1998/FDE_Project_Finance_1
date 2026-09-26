@@ -365,13 +365,56 @@ Neither adapter falls back to parsing prose when structure fails. A schema
 obtained by guessing at free text is not a schema, so `SchemaViolation` is
 raised with the offending payload attached.
 
+### Two model profiles, and a gate between them
+
+`MODEL_PROFILE` selects the models for the two OpenAI stages. One switch rather
+than four variables, because a half-switched configuration — an economy
+classifier feeding a full-price writer — saves little and is hard to reason
+about after the fact.
+
+| | Classifier / writer | Effort | Use |
+|---|---|---|---|
+| `economy` *(default)* | `gpt-5.4-mini` | `low` | Development, tests, rehearsal |
+| `full` | `gpt-6-astra` | `medium` | A run intended for a client |
+
+Both were established against this project's own classifier schema on the live
+API, not from documentation: strict `json_schema` on `/v1/responses` works for
+each, and a full 28-call graph run takes **25s on `economy` against ~90s on
+`full`**.
+
+**The saving is price and latency, not tokens.** A full run costs 32,189 tokens
+on `economy` and 30,047 on `full` — the schema fixes the shape of the answer, so
+a smaller model does not write less. The profile documentation says so rather
+than letting the word "economy" imply a token reduction it does not deliver.
+
+**What `economy` costs in quality, measured rather than assumed.** On the same 26
+tasks, `gpt-6-astra` resolved direction on 14 (54%) and `gpt-5.4-mini` on 5
+(19%), carrying the other 21 as `unclear`. Both refused to output `substitute`
+anywhere, and the lag interval was byte-identical. So the cheaper model is a
+sound test harness and a visibly weaker analyst on the one judgment this project
+argues the model earns its cost on.
+
+Which is why **the Review Gate blocks an `economy` run from being marked
+customer-deliverable**, in the same shape as the unverified-mirror policy:
+blocking on a deliverable run, informative on an internal one, so nobody's
+development loop is obstructed. The economy profile exists to make rehearsal
+cheap, and its runs persist like any other — the check is the only thing between
+"we tested on the cheap model" and "we handed a client a figure from it".
+
+One consequence to know about: `score.cohort_index` is keyed on
+`(cohort, classifier, rubric_version)`, so an `economy` run finds no reference
+set scored by `gpt-5.4-mini` and its calibration reads as *not identifiable*
+until the cohort is re-scored on that model. That is the key doing its job —
+ranking our index against a distribution some other model produced would not be
+a comparison — but it does mean the profiles are not interchangeable mid-analysis.
+
 ### Cost accounting withholds rather than guesses
 
 Token counts are facts the API reports and are always recorded. **Cost is
 reported only when a price is configured** via `PRICE_<MODEL>_INPUT` /
 `_OUTPUT`. `gpt-6-astra` postdates this project's reference material, so its
 price is not known here; the ledger returns `cost_usd: None` with
-`cost_status: "unpriced_models: gpt-6-astra"` rather than a total that silently
+`cost_status: "unpriced_models: gpt-5.4-mini"` rather than a total that silently
 omits half the calls.
 
 ### Retry

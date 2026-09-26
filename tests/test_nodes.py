@@ -15,6 +15,8 @@ import uuid
 
 import pytest
 
+import config
+
 from nodes import classifier, figure_guard, intent, retrieval, review_gate, synthesis
 from nodes.state import Evidence, GateDecision, NodeDeps, Phase, RunState, Scope
 from providers.base import (
@@ -453,6 +455,41 @@ def test_unverified_mirrors_block_only_a_deliverable_run(gate_ready):
 
     assert next(c for c in internal if c.name == "mirror_policy").passed
     assert not next(c for c in deliverable if c.name == "mirror_policy").passed
+
+
+def test_an_economy_profile_run_cannot_be_marked_customer_deliverable(
+        gate_ready, monkeypatch):
+    """A rehearsal must not be shippable, and it is the gate that says so.
+
+    The economy profile exists to make development and demos cheap. Its runs are
+    still real runs and persist like any other, so the only thing standing
+    between "we tested this on the cheap model" and "we gave the client a figure
+    from the cheap model" is this check. Same shape as the mirror policy:
+    blocking on a deliverable run, informative on an internal one, so nobody's
+    development loop is obstructed by it.
+    """
+    monkeypatch.setattr(config, "MODEL_PROFILE", "economy")
+    monkeypatch.setattr(config, "MODEL_CLASSIFIER", "gpt-5.4-mini")
+
+    internal = review_gate.structural_checks(gate_ready, deliverable=False,
+                                             tracker_sources=1)
+    deliverable = review_gate.structural_checks(gate_ready, deliverable=True,
+                                                tracker_sources=1)
+
+    assert next(c for c in internal if c.name == "model_profile").passed
+    blocked = next(c for c in deliverable if c.name == "model_profile")
+    assert not blocked.passed
+    # The detail must name the model, so a rejected run says which one it ran.
+    assert "gpt-5.4-mini" in blocked.detail
+
+
+def test_the_full_profile_passes_the_same_check(gate_ready, monkeypatch):
+    """Guards against the previous test passing because the check always fails."""
+    monkeypatch.setattr(config, "MODEL_PROFILE", "full")
+    monkeypatch.setattr(config, "MODEL_CLASSIFIER", "gpt-6-astra")
+    checks = review_gate.structural_checks(gate_ready, deliverable=True,
+                                           tracker_sources=1)
+    assert next(c for c in checks if c.name == "model_profile").passed
 
 
 def test_a_fitted_curve_would_fail_the_structural_check(gate_ready):

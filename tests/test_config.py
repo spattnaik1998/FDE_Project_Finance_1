@@ -259,3 +259,68 @@ def test_redaction_never_raises_when_keys_are_unreadable(monkeypatch):
     out = config.redact("token sk-abcdefghijklmnopqrs here")
     assert "sk-abcdefghijklmnopqrs" not in out, (
         "shape patterns must still apply when the key file is unreadable")
+
+
+# ===========================================================================
+# Model profiles
+# ===========================================================================
+#
+# The profile is a spending control, so its failure modes matter more than its
+# happy path: a typo that silently selects the expensive model, or a profile
+# that claims to be economical while naming the same model as `full`.
+
+def test_both_profiles_are_complete_and_actually_different():
+    for name, profile in config.MODEL_PROFILES.items():
+        assert set(profile) == {"classifier", "writer", "effort"}, name
+    economy = config.MODEL_PROFILES["economy"]
+    full = config.MODEL_PROFILES["full"]
+    assert economy["classifier"] != full["classifier"], (
+        "an 'economy' profile naming the same model as 'full' saves nothing "
+        "while implying it does")
+
+
+def test_an_unrecognised_profile_is_refused_rather_than_defaulted(monkeypatch):
+    """The costly mistake is defaulting to the expensive profile on a typo.
+
+    Reloading the module is the only way to exercise the import-time check, and
+    it is worth exercising: a misspelled MODEL_PROFILE that quietly ran
+    gpt-6-astra across a 231-call cohort build is exactly the bill this refusal
+    exists to prevent.
+    """
+    import importlib
+
+    monkeypatch.setenv("MODEL_PROFILE", "cheapest")
+    with pytest.raises(ValueError, match="MODEL_PROFILE"):
+        importlib.reload(config)
+
+    monkeypatch.setenv("MODEL_PROFILE", "economy")
+    importlib.reload(config)          # leave the module in a valid state
+    assert config.MODEL_PROFILE == "economy"
+
+
+def test_a_per_stage_override_wins_over_the_profile(monkeypatch):
+    """One stage can be raised without editing the profiles."""
+    import importlib
+
+    monkeypatch.setenv("MODEL_PROFILE", "economy")
+    monkeypatch.setenv("MODEL_CLASSIFIER", "gpt-6-astra")
+    importlib.reload(config)
+    try:
+        assert config.MODEL_CLASSIFIER == "gpt-6-astra"
+        assert config.MODEL_WRITER == config.MODEL_PROFILES["economy"]["writer"]
+    finally:
+        monkeypatch.delenv("MODEL_CLASSIFIER")
+        importlib.reload(config)
+
+
+def test_the_summary_names_the_models_actually_in_force():
+    """Logs and run notes must show the resolved models, not the profile name.
+
+    A line reading only "profile=economy" is useless six months later when the
+    profile's contents have changed. The models are the fact worth recording.
+    """
+    summary = config.model_profile_summary()
+    assert config.MODEL_PROFILE in summary
+    assert config.MODEL_CLASSIFIER in summary
+    assert config.MODEL_WRITER in summary
+    assert config.REASONING_EFFORT in summary

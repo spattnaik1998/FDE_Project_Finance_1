@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+import config
 from nodes import prompts
 from nodes.state import GateDecision, NodeDeps, Phase, RunState
 from providers.base import CallContext, ProviderError
@@ -102,6 +103,23 @@ def structural_checks(state: RunState, *, deliverable: bool = False,
             if deliverable and mirrored else
             " — permitted on an internal run, flagged."))
         if mirrored else "No unverified mirror sources cited.",
+        blocking=deliverable))
+
+    # Same shape as the mirror policy, for the same reason. An economy-profile
+    # run is a rehearsal: a cheaper classifier, and no cohort reference set
+    # scored by it, so its calibration is unidentifiable by construction.
+    # Perfectly fine internally, and not something to hand a client. Blocking
+    # only on a deliverable run, so development is not obstructed.
+    economy = config.MODEL_PROFILE != "full"
+    checks.append(StructuralCheck(
+        "model_profile",
+        not (deliverable and economy),
+        (f"Running the {config.MODEL_PROFILE} model profile "
+         f"({config.MODEL_CLASSIFIER} at {config.REASONING_EFFORT} effort)"
+         + (" — blocks a customer-deliverable run."
+            if deliverable and economy else
+            " — permitted on an internal run, flagged."))
+        if economy else config.model_profile_summary(),
         blocking=deliverable))
 
     return checks
