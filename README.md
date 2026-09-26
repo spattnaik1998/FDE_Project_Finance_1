@@ -712,17 +712,53 @@ python scripts/run_ui.py                  # http://127.0.0.1:8501
 python scripts/verify_stack.py --layer ui # gateway, runtime, loopback binding
 ```
 
-Eight sections in the browser, rendering a run that already happened. Standing
-first, provenance last, exposure and lag never combined.
+Eight sections in the browser, rendering a run that already happened. The finding
+leads, its standing is immediately under it, provenance last, exposure and lag
+never combined.
 
-### Four modules, one boundary
+### A document, not a dashboard
+
+The first version styled Streamlit's widgets and lost. Every `st.metric` and
+`st.dataframe` brings its own container, its own margin and its own idea of a
+heading, so the result read as a tinted dashboard however good the colours were —
+and a dashboard is for monitoring something you already understand, while this
+reader is being persuaded.
+
+The block list is unchanged — it is still the presentation model and still what
+the tests inspect — but `app/document.py` composes it into **one HTML document**,
+emitted in one call per run. What that buys: real `<table>` markup with numerals
+right-aligned in a tabular face instead of a data grid; `<details>` for the method
+disclosures instead of expander chrome; a three-card summary band above the fold;
+a masthead that reads as a letterhead; Source Serif for the argument, IBM Plex
+Sans for labels, IBM Plex Mono for every quantity; and a print stylesheet, because
+a research note gets printed.
+
+Two block kinds stay widgets and are listed rather than assumed: the question box,
+and the download button, which needs a real HTTP response that markup cannot
+produce. `document.render_block` raises on anything that is neither rendered nor
+declared a widget, and the dispatcher's dead branches were deleted rather than
+left unreachable.
+
+Streamlit is now a loopback host, which is all TDD 4.1 asks of it. A Node or
+Next.js pivot was considered and rejected: what made the page look like Streamlit
+was its widgets, not its presence, and routing is the only thing a pivot would
+have added.
+
+Because this module builds HTML by concatenation it is the one injection surface
+in the project, so every interpolated value passes through `esc()` and
+`test_every_value_reaching_the_markup_is_escaped` renders a view whose strings are
+hostile.
+
+### Five modules, one boundary
 
 | Module | Role | May touch the warehouse |
 |---|---|---|
 | `app/gateway.py` | application-tier facade; loads, renders, walks the trace | **yes** |
 | `app/view_model.py` | plain strings and booleans — the boundary object | no |
-| `app/blocks.py` | what to show, as data | no |
-| `app/streamlit_app.py` | dispatcher: one block → one `st.*` call | no |
+| `app/blocks.py` | what to show, as data; numbers the sections | no |
+| `app/document.py` | blocks → document markup; no arithmetic, everything escaped | no |
+| `app/copy.py` | every client-facing sentence | no |
+| `app/streamlit_app.py` | dispatcher: document runs, plus the two real widgets | no |
 
 The UI receives a `ReportView` and has nothing else to work with. The tiers are
 logical and co-located in one process (TDD 4.1, "in-process call"), so nothing
@@ -737,7 +773,14 @@ Every number reaches the page as a string on the view model, formatted upstream
 by the report's figure registry — which already refused to produce any figure
 lacking provenance. `test_the_ui_displays_no_figure_the_view_model_did_not_carry`
 walks every block, extracts every numeric literal and asserts it came from the
-view model. It reuses `report.provenance._is_furniture`, so "what counts as
+view model — and `test_no_figure_reaches_the_rendered_text_unaccounted_for` does
+the same one layer down, on the text a browser would show, so a renderer that
+reformatted a value cannot slip past a block-level check. That second test was
+vacuous when first written: it passed the whole document as `_is_furniture`'s
+context argument, which takes a *line*, so one furniture token anywhere excused
+every number on the page. It now splits per element and
+`test_that_rendered_text_check_catches_an_invented_figure` injects "73.2% by
+2031" to prove it can fail. It reuses `report.provenance._is_furniture`, so "what counts as
 document furniture" has one definition rather than two that can drift.
 
 Backed by `test_no_block_performs_arithmetic`, an `ast` check that

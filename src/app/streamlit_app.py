@@ -33,6 +33,7 @@ if str(_SRC) not in sys.path:
 import streamlit as st
 
 from app import blocks as blocks_module
+from app import document
 from app.contract import RefusalReason, RunCost, RunRequest
 from app.style import STYLESHEET
 from app.gateway import (NoRunAvailable, available_runs, in_scope_occupations,
@@ -50,88 +51,21 @@ TONE_RENDERER = {"ok": "success", "warn": "warning", "stop": "error",
 
 
 def render_block(block: blocks_module.Block) -> None:
-    """Turn one block into a Streamlit call.
+    """Render one block that has to be a real widget.
 
-    Raises on an unknown kind rather than skipping it. A silently dropped block
-    is a figure the customer never saw, which is the failure mode this whole
-    project is built to avoid.
+    Only three kinds reach here. Everything that is part of the document is
+    markup now (:mod:`app.document`), and the branches for headings, tables,
+    figures and the rest were deleted rather than left unreachable --- a
+    dispatcher listing renderers nothing calls invites the next person to edit
+    the wrong one.
+
+    Raises on anything else rather than skipping it: a silently dropped block is
+    a figure the customer never saw, which is the failure mode this whole project
+    is built to avoid.
     """
     kind, payload, meta = block.kind, block.payload, block.meta
 
-    if kind == "title":
-        st.title(payload)
-    elif kind == "caption":
-        st.caption(payload)
-    elif kind == "heading":
-        st.subheader(payload)
-    elif kind == "markdown":
-        st.markdown(payload)
-    elif kind == "divider":
-        st.divider()
-    elif kind == "callout":
-        getattr(st, TONE_RENDERER.get(meta.get("tone", "warn"), "warning"))(
-            payload)
-    elif kind == "metrics":
-        columns = st.columns(len(payload))
-        for column, metric in zip(columns, payload):
-            with column:
-                st.metric(label=metric["label"], value=metric["value"],
-                          help=metric.get("help"))
-    elif kind == "table":
-        st.dataframe({column: [row[index] for row in payload["rows"]]
-                      for index, column in enumerate(payload["columns"])},
-                     width="stretch", hide_index=True)
-    elif kind == "expander":
-        with st.expander(meta.get("label", "Details")):
-            for inner in payload:
-                render_block(inner)
-    elif kind == "style":
-        st.markdown(payload, unsafe_allow_html=True)
-    elif kind == "figure":
-        meter = (f'<div class="meter"><i style="width:{payload["fill"]}"></i></div>'
-                 if payload.get("fill") else "")
-        note = (f'<div class="fig-note">{payload["note"]}</div>'
-                if payload.get("note") else "")
-        st.markdown(
-            f'<div class="fig-label">{payload["label"]}</div>'
-            f'<div class="fig">{payload["value"]}</div>{meter}{note}',
-            unsafe_allow_html=True)
-    elif kind == "span":
-        note = (f'<div class="fig-note">{payload["note"]}</div>'
-                if payload.get("note") else "")
-        st.markdown(
-            f'<div class="fig-label">{payload["label"]}</div>'
-            f'<div class="span-rule">'
-            f'<span class="tick">{payload["low"]}</span>'
-            f'<span class="dash"></span>'
-            f'<span class="mid">median {payload["mid"]}</span>'
-            f'<span class="dash"></span>'
-            f'<span class="tick">{payload["high"]}</span>'
-            f'</div>{note}', unsafe_allow_html=True)
-    elif kind == "masthead":
-        st.markdown(
-            f'<div class="masthead">'
-            f'<div class="eyebrow">{payload["eyebrow"]}</div>'
-            f'<h1>{payload["title"]}</h1>'
-            f'<div class="question">{payload["question"]}</div>'
-            f'<div class="meta">{payload["meta"]}</div>'
-            f'</div>', unsafe_allow_html=True)
-    elif kind == "panel":
-        # A container, so the finding reads as one object rather than as loose
-        # paragraphs. Streamlit cannot wrap arbitrary widgets in a div, so the
-        # rule and the padding are drawn by a bordered container instead.
-        with st.container(border=True):
-            st.markdown(f'<div class="panel-label">{meta["label"]}</div>',
-                        unsafe_allow_html=True)
-            for inner in payload:
-                render_block(inner)
-    elif kind == "standing":
-        st.markdown(
-            f'<div class="standing {payload["tone"]}">'
-            f'<div class="tag">{payload["tag"]}</div>'
-            f'<div class="body">{payload["body"]}</div></div>',
-            unsafe_allow_html=True)
-    elif kind == "request_form":
+    if kind == "request_form":
         # The request half of the TDD 1.1 contract. Collects a question and
         # nothing else; scope resolution belongs to the Intent & Scope node.
         with st.form("run_request", clear_on_submit=False):
@@ -149,16 +83,41 @@ def render_block(block: blocks_module.Block) -> None:
                 st.session_state["pending_request"] = question
                 st.rerun()
     elif kind == "download":
+        # A widget because it needs a real HTTP response, which markup cannot
+        # produce. The only other reason to keep one.
         st.download_button(meta.get("label", "Download"), payload,
                            file_name=meta.get("file_name", "report.md"),
                            mime="text/markdown")
+    elif kind == "style":
+        st.markdown(payload, unsafe_allow_html=True)
     else:                                        # pragma: no cover - guarded
-        raise ValueError(f"no renderer for block kind {kind!r}")
+        raise ValueError(
+            f"block kind {kind!r} is not a widget; it belongs in the document")
 
 
 def render_page(view: ReportView) -> None:
-    for block in blocks_module.page(view):
-        render_block(block)
+    """Emit the report as document runs with widgets in their proper places.
+
+    One ``st.html`` per run rather than one widget per block. The block list is
+    unchanged --- it is still the presentation model and still what the tests
+    inspect --- but composing it into a document is what lets the page have one
+    measure, one vertical rhythm and one type scale. Styling Streamlit's own
+    widgets was the first attempt and it read as a tinted dashboard, because each
+    widget brings its own container and its own idea of a heading.
+
+    The download button stays a widget because it needs a real HTTP response,
+    which markup cannot produce --- and it is emitted in position, inside the
+    section that earns it, rather than appended after the document.
+    """
+    _emit(blocks_module.page(view))
+
+
+def _emit(page_blocks) -> None:
+    for kind, item in document.segments(page_blocks):
+        if kind == "html":
+            st.html(item)
+        else:
+            render_block(item)
 
 
 def sidebar_run_id() -> str | None:
@@ -210,9 +169,8 @@ def _run_pending_request() -> str | None:
                    f"{result.tokens:,} tokens")
         return result.run_id
 
-    for block in blocks_module.refusal_blocks(
-            RefusalReason(**result.refusal.model_dump())):
-        render_block(block)
+    _emit(blocks_module.refusal_blocks(
+        RefusalReason(**result.refusal.model_dump())))
     return None
 
 
@@ -223,28 +181,36 @@ def main() -> None:
 
     fresh_run_id = _run_pending_request()
 
-    # The request form sits above the report: the customer's own question is
-    # the entry point, and the rendered run is the answer to it.
-    try:
-        occupations = in_scope_occupations()
-    except Exception:                            # noqa: BLE001 - degrade
-        occupations = []
-    if occupations:
-        for block in blocks_module.request_form_blocks(
-                occupations, DEFAULT_QUESTION, RunCost()):
-            render_block(block)
-
     try:
         view = load_view(fresh_run_id or sidebar_run_id())
     except NoRunAvailable as exc:
-        st.title(PAGE_TITLE)
         st.info(str(exc))
+        _render_request_form()
         return
     except Exception as exc:                     # noqa: BLE001 - surfaced in UI
-        st.title(PAGE_TITLE)
         st.error(f"Could not load the run: {exc}")
         return
+
     render_page(view)
+    # The form follows the document, and that order was reversed deliberately.
+    # It used to lead, on the reasoning that the customer's own question is the
+    # entry point. But an input box above the letterhead makes the page read as a
+    # tool rather than as a note, and the entry point for someone being shown
+    # this is the finding. "Ask about another role" is the right next move once
+    # they have read one, so it sits where that move belongs.
+    _render_request_form()
+
+
+def _render_request_form() -> None:
+    """The request half of the TDD 1.1 contract, if any occupation is published."""
+    try:
+        occupations = in_scope_occupations()
+    except Exception:                            # noqa: BLE001 - degrade quietly
+        return
+    if not occupations:
+        return
+    _emit(blocks_module.request_form_blocks(
+        occupations, DEFAULT_QUESTION, RunCost()))
 
 
 # Streamlit executes the script with __name__ == "__main__" -- verified against

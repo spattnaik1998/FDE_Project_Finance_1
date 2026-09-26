@@ -400,9 +400,26 @@ def verify_ui(report: Report) -> None:
             return FAIL, "; ".join(str(e.value) for e in app.exception)[:140]
         if app.error:
             return FAIL, "; ".join(str(e.value) for e in app.error)[:140]
-        return (f"{len(app.subheader)} sections, {len(app.metric)} metrics, "
-                f"{len(app.dataframe)} tables, {len(app.warning)} warnings, "
-                f"0 errors")
+
+        # Counted in the emitted document, not in Streamlit widgets.
+        #
+        # This read len(app.subheader) / len(app.metric) / len(app.dataframe),
+        # which were the right counters while the page was built from widgets.
+        # Once it became a composed document they all went to zero and the check
+        # still reported PASS -- a green line measuring nothing, which is the
+        # exact failure mode this script is written to avoid. It now fails if the
+        # document is absent or carries no sections.
+        markup = " ".join(e.proto.body for e in app.get("html"))
+        if not markup:
+            return FAIL, "the report document did not render"
+        sections = markup.count('<h2 class="sec">')
+        tables = markup.count("<table>")
+        if sections < 8 or tables < 2:
+            return FAIL, (f"document is incomplete: {sections} sections, "
+                          f"{tables} tables")
+        return (f"{sections} sections, {tables} tables, "
+                f'{markup.count(chr(34) + "fig" + chr(34))} figures, ' 
+                f"{len(markup):,} chars, 0 errors")
 
     @check(report, "ui", "bound to loopback only, if running")
     def _():

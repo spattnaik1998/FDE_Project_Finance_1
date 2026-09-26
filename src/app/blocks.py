@@ -25,7 +25,8 @@ from app.view_model import ReportView
 # because a silently dropped block is a figure the customer never saw.
 KINDS = ("title", "caption", "heading", "markdown", "callout", "metrics",
          "table", "divider", "expander", "download", "request_form",
-         "style", "figure", "span", "standing", "masthead", "panel")
+         "style", "figure", "span", "standing", "masthead", "panel",
+         "cards")
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,20 @@ def _span(label: str, low: str, mid: str, high: str, note: str = "") -> Block:
     """
     return _b("span", {"label": label, "low": low, "mid": mid, "high": high,
                        "note": note})
+
+
+def _cards(*inner: Block) -> Block:
+    """The summary band: the three findings, side by side, above the fold.
+
+    Side by side is a considered risk rather than an oversight. The architecture
+    refuses to combine exposure and lag into one score, and putting them in one
+    row is the mildest form of inviting that. But a reader who has to assemble
+    the answer from three sections has not been given the answer, and the first
+    ten seconds of a client meeting is where that matters. The mitigation is
+    grammatical: each card keeps its own form, the label says what it is, and no
+    arithmetic relates them. The caveats stay with the detailed sections.
+    """
+    return _b("cards", list(inner))
 
 
 def _standing(tone: str, tag: str, body: str) -> Block:
@@ -159,12 +174,23 @@ def header_blocks(view: ReportView) -> list[Block]:
                     f"{view.tasks_scored} tasks assessed · "
                     f"prepared {view.generated_on}",
         }),
+        _cards(
+            _figure("Tasks AI could do today", view.exposure_share_text,
+                    note="Of this role's published task list",
+                    fill_percent=view.exposure_percent),
+            _span("Years to the cost line", view.lag_p10, view.lag_p50,
+                  view.lag_p90, note="Earliest, most likely, latest"),
+            _figure("Tasks it would replace outright",
+                    view.direction_substitute,
+                    note=f"Against {view.direction_augment} it would assist"),
+        ),
         _b("panel", [
             _b("markdown", copy.bottom_line(view)),
             _b("markdown", copy.bottom_line_action(view)),
         ], label=copy.BOTTOM_LINE_LABEL),
         _b("markdown", copy.MASTHEAD_NOTE),
-        _b("divider"),
+        # No divider here: page() appends one after every section, and emitting
+        # one as well drew two hairlines a few pixels apart.
     ]
 
 
@@ -376,16 +402,40 @@ def provenance_blocks(view: ReportView) -> list[Block]:
     return blocks
 
 
+def _numbered(blocks: list[Block]) -> list[Block]:
+    """Attach a section number to each heading, in order.
+
+    The number lives in the block's meta rather than in the heading text, so the
+    copy stays a plain question: a number inside "How much of this job could
+    software already do?" is jargon, while a number in the margin beside it is
+    navigation.
+
+    Done here rather than in the document composer because numbering is a
+    property of being a report section. The composer is handed block lists that
+    are not reports --- the request form, a refusal --- and numbering those put a
+    "09" beside "Ask about a role".
+    """
+    out: list[Block] = []
+    counter = 0
+    for block in blocks:
+        if block.kind == "heading":
+            counter += 1
+            out.append(Block(kind=block.kind, payload=block.payload,
+                             meta={**block.meta, "index": f"{counter:02d}"}))
+        else:
+            out.append(block)
+    return out
+
+
 def page(view: ReportView) -> list[Block]:
-    """The whole page, in order. Standing first, provenance last."""
+    """The whole page, in order. The finding leads, provenance last."""
     blocks: list[Block] = []
     for section in (header_blocks, standing_blocks, exposure_blocks,
                     lag_blocks, calibration_blocks, direction_blocks,
                     task_table_blocks, limitations_blocks, provenance_blocks):
         blocks.extend(section(view))
         blocks.append(_b("divider"))
-    return blocks[:-1]
-
+    return _numbered(blocks[:-1])
 
 # ---------------------------------------------------------------------------
 # For the tests: everything displayed, as flat text

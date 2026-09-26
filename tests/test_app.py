@@ -285,6 +285,78 @@ def test_the_ui_displays_no_figure_the_view_model_did_not_carry():
         + "; ".join(f"{lit!r} in {ctx!r}" for lit, ctx in unaccounted[:6]))
 
 
+def test_no_figure_reaches_the_rendered_text_unaccounted_for():
+    """The same acceptance criterion, one layer further down.
+
+    The test above walks the block list. The customer reads the *document*, so a
+    renderer that computed or reformatted a value would satisfy that test and
+    still put an untraceable number on the page. This strips the markup and walks
+    the text a browser would show.
+
+    Class names and CSS values are excluded by taking text content only ---
+    "width:39.1%" lives in an attribute and is the exposure index in another
+    unit, already traced --- but every numeral a reader can see is checked.
+    """
+    import re
+
+    from app import document
+
+    view = _view()
+    markup = document.compose(page(view))
+    # Text content only, ONE ELEMENT PER LINE. Tags become newlines rather than
+    # spaces, which matters more than it looks: _is_furniture takes its context
+    # argument as a line, and one of the tokens that marks a line as furniture
+    # appearing anywhere in the document would otherwise excuse every number on
+    # the page. The first cut of this test collapsed the document to a single
+    # string and passed vacuously for exactly that reason.
+    text = re.sub(r"<[^>]+>", "\n", markup)
+    for entity, char in (("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"),
+                         ("&quot;", '"'), ("&#x27;", "'")):
+        text = text.replace(entity, char)
+
+    unaccounted = []
+    for line in text.splitlines():
+        for literal, value in _numbers_in(line):
+            if literal in view.figures or _identifier_like(line):
+                continue
+            if _is_furniture(literal, value, line):
+                continue
+            unaccounted.append(literal)
+
+    assert not unaccounted, (
+        "numbers visible in the rendered document that the view model did not "
+        f"carry: {sorted(set(unaccounted))[:8]}")
+
+
+def test_that_rendered_text_check_catches_an_invented_figure(monkeypatch):
+    """The check above must be able to fail, and it could not at first.
+
+    An untraceable percentage and year are injected into the copy the page
+    renders. If they do not surface, the check is decoration --- which is what it
+    was while it passed the whole document as a single context line.
+    """
+    import re
+
+    from app import copy as ui_copy
+    from app import document
+
+    monkeypatch.setattr(
+        ui_copy, "EXPOSURE_NOT",
+        ui_copy.EXPOSURE_NOT + " Fully 73.2% of these roles vanish by 2031.")
+
+    view = _view()
+    text = re.sub(r"<[^>]+>", "\n", document.compose(page(view)))
+    caught = {literal
+              for line in text.splitlines()
+              for literal, value in _numbers_in(line)
+              if literal not in view.figures
+              and not _identifier_like(line)
+              and not _is_furniture(literal, value, line)}
+
+    assert "73.2%" in caught, f"the invented share was not caught; got {caught}"
+    assert "2031" in caught, f"the invented year was not caught; got {caught}"
+
+
 def test_the_page_actually_displays_the_headline_figures():
     """Guards against the previous test passing because nothing is shown."""
     strings = " ".join(displayed_strings(page(_view())))
@@ -538,15 +610,67 @@ def test_an_unknown_block_kind_is_refused_at_construction():
 
 
 def test_every_kind_the_blocks_module_emits_has_a_renderer():
-    """A block kind with no renderer would be silently dropped.
+    """A block kind with no renderer would be a figure the customer never saw.
 
-    Checked by reading the dispatcher's source rather than executing it, so
-    the test needs no Streamlit process.
+    Two renderer sets now: the document composer draws everything that is part of
+    the document, and the dispatcher keeps the few kinds that must be real
+    widgets. Every emitted kind must be covered by one of them, and
+    ``document.render_block`` raises on anything else rather than skipping it --
+    so this asserts the coverage and the next test asserts the refusal.
     """
+    from app import document
+
     emitted = {b.kind for b in page(_view())}
+    covered = set(document.RENDERERS) | set(document.WIDGET_KINDS)
+    assert not emitted - covered, (
+        f"no renderer for block kinds: {sorted(emitted - covered)}")
+
     dispatcher = _source(UI_MODULE)
-    missing = [kind for kind in emitted if f'== "{kind}"' not in dispatcher]
-    assert not missing, f"no renderer for block kinds: {missing}"
+    for kind in document.WIDGET_KINDS:
+        if kind == "style":                      # emitted by main(), not a block
+            continue
+        assert f'== "{kind}"' in dispatcher, (
+            f"{kind} is declared a widget but the dispatcher does not render it")
+
+
+def test_the_document_composer_refuses_an_unrenderable_block(monkeypatch):
+    """Silently dropping a block is how a figure disappears without a trace.
+
+    No block kind is currently unrenderable --- which is the point of the test
+    above --- so the refusal is exercised by removing a renderer. That is the
+    state a future edit would leave behind by adding a kind and forgetting the
+    composer, and it must raise rather than emit a page with a section missing.
+    """
+    from app import document
+
+    monkeypatch.delitem(document.RENDERERS, "table")
+    with pytest.raises(ValueError, match="no document renderer"):
+        document.render_block(Block(kind="table", payload={"columns": [],
+                                                          "rows": []}))
+
+
+def test_every_value_reaching_the_markup_is_escaped():
+    """This module builds HTML by concatenation, so it is the injection surface.
+
+    A source document's title or a task statement is data from the warehouse. If
+    one contained a tag it would otherwise become markup on the page. Checked on
+    a view whose strings are hostile, because the escaping is easy to lose in a
+    later edit to one renderer.
+    """
+    from app import document
+
+    hostile = '<img src=x onerror="alert(1)">'
+    view = _view(occupation_title=hostile,
+                 tasks=(TaskRowView(hostile, "0.900", "0.250", "0.675",
+                                    "augment", "medium"),))
+    markup = document.compose(page(view))
+
+    assert hostile not in markup, "the raw tag reached the page"
+    assert "<img" not in markup
+    # The word survives as text, which is correct; what must not survive is the
+    # attribute syntax that would make it an attribute.
+    assert 'onerror="' not in markup
+    assert "&lt;img" in markup, "the value must still be displayed, escaped"
 
 
 def test_the_declared_kinds_cover_everything_emitted():
@@ -682,65 +806,140 @@ def test_the_app_runs_without_raising(executed_app):
     assert len(executed_app.error) == 0, [e.value for e in executed_app.error]
 
 
-def test_the_app_renders_all_eight_report_sections(executed_app):
-    """The eight report sections, plus the request form above them.
+def _document(app) -> str:
+    """The rendered document's markup, from the live Streamlit runtime.
 
-    Asserted by membership rather than by count: the request form adds a ninth
-    subheader, and a test pinned to "exactly eight" would fail on a deliberate
-    addition while saying nothing about whether the report is complete.
+    ``AppTest`` has no ``.html`` accessor, so the element comes out of the
+    generic ``get("html")`` as an ``UnknownElement`` and the body is read off its
+    proto. Established by probing the harness rather than assumed --- and worth
+    the indirection, because asserting against the real emitted markup is what
+    makes these tests statements about what a browser receives.
     """
-    headings = [s.value for s in executed_app.subheader]
+    elements = app.get("html")
+    assert elements, "the report document did not render at all"
+    return elements[0].proto.body
+
+
+def test_the_app_renders_all_eight_report_sections(executed_app):
+    """Every section reaches the document, checked in the emitted markup."""
+    markup = _document(executed_app)
     for key in ("standing", "exposure", "lag", "calibration", "direction",
                 "tasks", "limits", "provenance"):
-        assert copy.HEADINGS[key] in headings, (
-            f"{key} section did not render; got {headings}")
+        heading = copy.HEADINGS[key]
+        assert heading in markup, f"{key} section did not render"
 
 
-def test_the_app_offers_the_request_form_above_the_report(executed_app):
-    """The customer's own question is the entry point, so it comes first."""
-    headings = [s.value for s in executed_app.subheader]
-    assert copy.FORM_HEADING in headings
-    assert headings.index(copy.FORM_HEADING) < headings.index(
-        copy.HEADINGS["standing"])
+def test_the_sections_are_numbered_in_the_document(executed_app):
+    """Navigation the copy deliberately keeps out of the headings themselves.
+
+    A number inside "How much of this job could software already do?" is jargon;
+    a number in the margin beside it is navigation. So the numbering is applied
+    by the document composer from position, and this asserts it survives into the
+    markup rather than only existing in the block meta.
+    """
+    markup = _document(executed_app)
+    for index in ("01", "02", "03", "08"):
+        assert f'<span class="sec-no">{index}</span>' in markup
+
+
+def test_the_app_offers_the_request_form_after_the_report(executed_app):
+    """A reversal from W8, and the reason is a design judgment worth pinning.
+
+    The form used to lead, on the reasoning that the customer's own question is
+    the entry point. But an input box above the letterhead makes the page read as
+    a tool rather than as a note, and the entry point for someone being shown
+    this is the finding. "Ask about another role" is the right next move once they
+    have read one.
+
+    The form must still be reachable without a click --- not tucked into a
+    collapsed sidebar --- so this asserts it is on the page, after the document,
+    with its own prose set in the document's type system rather than as bare
+    framework widgets.
+    """
+    markup = " ".join(e.proto.body for e in executed_app.get("html"))
+    assert copy.FORM_HEADING in markup
+    assert copy.FORM_INTRO in markup
+    assert markup.index(copy.HEADINGS["provenance"]) < markup.index(
+        copy.FORM_HEADING), "the document must precede the form"
+
+    # And the interactive part is a real widget, not markup pretending to be one.
+    assert executed_app.text_area, "the question box did not render"
+    assert executed_app.button or executed_app.get("form_submit_button")
 
 
 def test_the_app_renders_the_headline_figures(executed_app):
-    """Exposure and lag are rendered as typography now, not as metric tiles.
+    """The summary band and both detail figures, in the emitted markup.
 
-    They moved off st.metric so the two can carry different visual grammar --
-    exposure is bounded and gets a track, the lag is an unbounded interval and
-    deliberately does not. So they appear in markdown rather than in the metric
-    list, and the provenance metrics stay as tiles.
+    They are typography, not metric tiles, so that exposure and the lag can carry
+    different visual grammar: exposure is bounded and gets a meter with a track,
+    the lag is an unbounded interval and deliberately gets a span with none.
+    Asserted here as classes, because that difference is the architecture's
+    "never combine them" claim expressed in the design.
     """
-    rendered = " ".join(m.value for m in executed_app.markdown)
+    markup = _document(executed_app)
+    assert 'class="cards"' in markup, "the summary band did not render"
+    assert 'class="meter"' in markup, "the bounded figure lost its track"
+    assert 'class="span"' in markup, "the lag interval did not render"
     for expected in ("Share of tasks AI could perform today",
                      "Years before the cost line moves"):
-        assert expected in rendered, f"{expected} did not render"
-
-    labels = [m.label for m in executed_app.metric]
-    assert "Figures traced to a source" in labels
+        assert expected in markup, f"{expected} did not render"
+    assert "Figures traced to a source" in markup
 
 
-def test_the_app_renders_the_tables(executed_app):
-    """Per-task table and provenance table, at minimum."""
-    assert len(executed_app.dataframe) >= 2
+def test_the_lag_never_gets_the_bounded_figures_gauge(executed_app):
+    """The one visual rule that carries an architectural claim.
+
+    A meter says "this much of a whole". The lag has no whole --- there is no
+    upper bound on years to reorganisation --- so a meter would assert something
+    the model refuses to. This fails if the span is ever given a track.
+    """
+    markup = _document(executed_app)
+    span_start = markup.index('class="span"')
+    span_end = markup.index("</div>", span_start)
+    assert 'class="meter"' not in markup[span_start:span_end]
+
+
+def test_the_app_renders_the_tables_as_tables(executed_app):
+    """Real table markup, not a data grid.
+
+    ``st.dataframe`` renders a scrollable grid with its own chrome, sized in
+    pixels and styled by the framework. A research note has tables: a rule under
+    the header, hairline rows, numerals right-aligned in a tabular face. The one
+    remaining dataframe is the coverage list inside the request form, which is
+    a widget rather than part of the document.
+    """
+    markup = _document(executed_app)
+    assert markup.count("<table>") >= 2, "per-task and provenance tables"
+    assert "<thead>" in markup and "<tbody>" in markup
+    assert 'class="num"' in markup, "numerals must be set as numerals"
 
 
 def test_an_uncalibrated_run_states_its_standing_without_alarming(executed_app):
     """Visible, and not styled as a failure.
 
-    The earlier version required a st.warning banner. That banner was the
-    problem: an uncalibrated run is a finding, and a hazard strip made a
-    correct result look like a broken one. The standing is now a hairline stamp
-    -- so the assertion is that the text is on the page and that nothing is
-    rendered as an error.
+    An earlier version required a ``st.warning`` banner. That banner was the
+    problem: an inconclusive check is a finding, and a hazard strip made a
+    correct result look like a broken one. The standing is a hairline stamp --- so
+    this asserts the text is in the document, that it carries its tone as a
+    class, and that nothing is rendered as an error.
     """
-    rendered = " ".join(m.value for m in executed_app.markdown)
-
+    markup = _document(executed_app)
     tags = [tag for tag, _ in copy.STANDING.values()]
-    assert any(tag in rendered for tag in tags), (
+    assert any(tag in markup for tag in tags), (
         "the run's standing must appear on the page")
+    assert 'class="standing' in markup
     assert len(executed_app.error) == 0, [e.value for e in executed_app.error]
+
+
+def test_the_host_framework_chrome_is_hidden(executed_app):
+    """It is a document, so the framework's menu and footer do not belong on it.
+
+    Asserted against the stylesheet actually emitted by the running app, not
+    against the source, so a stylesheet that fails to reach the page fails here.
+    """
+    emitted = " ".join(m.value for m in executed_app.markdown)
+    assert 'header[data-testid="stHeader"]' in emitted
+    assert "#MainMenu" in emitted
 
 
 def test_the_app_does_not_render_our_percentile_when_unidentifiable(
@@ -751,9 +950,9 @@ def test_the_app_does_not_render_our_percentile_when_unidentifiable(
     view = load_view()
     if view.calibration_is_identifiable:
         pytest.skip("this run calibrated; the unidentifiable path is not live")
-    labels = [m.label for m in executed_app.metric]
-    assert not any("ranks at" in label for label in labels)
-    assert "Difference" not in labels
+    markup = _document(executed_app)
+    assert "ranks at" not in markup
+    assert "Difference" not in markup
 
 
 # ===========================================================================
@@ -930,6 +1129,15 @@ def test_every_block_kind_the_form_emits_has_a_renderer():
     emitted |= {b.kind for b in refusal_blocks(
         RefusalReason(code="c", message="m"))}
 
+    # The form and a refusal go through the same two renderer sets as the
+    # report: the document composer for their prose, the dispatcher for the one
+    # interactive kind. Checked against both, not against the dispatcher alone,
+    # which is what this asserted while every block was a widget.
+    from app import document
+
+    covered = set(document.RENDERERS) | set(document.WIDGET_KINDS)
+    assert not emitted - covered, f"no renderer for: {sorted(emitted - covered)}"
+
     dispatcher = _source(UI_MODULE)
-    missing = [k for k in emitted if f'== "{k}"' not in dispatcher]
-    assert not missing, f"no renderer for: {missing}"
+    assert '== "request_form"' in dispatcher, (
+        "the question box must be a real widget, not markup pretending to be one")
