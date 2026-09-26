@@ -123,7 +123,26 @@ def _presentation_forms(data: ReportData) -> frozenset[str]:
         forms.add(f"{round(share)}%")     # the share quoted in prose
     except (TypeError, ValueError):
         pass
+    # And every per-task bar in the exposure spine, for the same reason: each is
+    # that task's own adjusted score in another unit, already registered.
+    for task in data.tasks:
+        forms.add(_bar(task.exposure_adjusted))
     return frozenset(forms)
+
+
+def _bar(value) -> str:
+    """One task's net exposure as a CSS width.
+
+    Computed here rather than in the presentation tier, which is forbidden to do
+    arithmetic --- a layer that can compute can produce a figure that is on no
+    source, and the test that walks the page for untraceable numbers would have
+    nothing to catch it with. This tier already holds the traced figures, so the
+    unit conversion belongs here and the result joins the traced set.
+    """
+    try:
+        return f"{max(0.0, min(1.0, float(value))) * 100:.0f}%"
+    except (TypeError, ValueError):
+        return "0%"
 
 
 def _figure_literals(registry) -> frozenset[str]:
@@ -190,7 +209,8 @@ def _to_view(data: ReportData, registry, trace, markdown: str) -> ReportView:
             statement=t.statement,
             raw=fmt(t.exposure_raw), tacit=fmt(t.tacitness),
             adjusted=fmt(t.exposure_adjusted),
-            direction=t.direction, confidence=t.confidence)
+            direction=t.direction, confidence=t.confidence,
+            exposure_bar=_bar(t.exposure_adjusted))
             for t in data.tasks),
         sources=tuple(SourceView(
             doc_id=s.doc_id, title=s.title, publisher=s.publisher, url=s.url,

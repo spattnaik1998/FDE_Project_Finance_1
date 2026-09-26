@@ -76,10 +76,13 @@ def _view(**overrides) -> ReportView:
         delta="not identifiable",
         direction_augment="14", direction_substitute="0",
         direction_unclear="12",
+        # exposure_bar is set here because the gateway sets it: it is each task's
+        # adjusted score as a CSS width for the exposure spine. A fixture that
+        # left it at the default stopped describing a real view.
         tasks=(TaskRowView("Create client presentations.", "0.900", "0.250",
-                           "0.675", "augment", "medium"),
+                           "0.675", "augment", "medium", "68%"),
                TaskRowView("Develop client relationships.", "0.550", "0.550",
-                           "0.247", "unclear", "medium")),
+                           "0.247", "unclear", "medium", "25%")),
         sources=(SourceView("onet_task_statements", "O*NET tasks", "DOL",
                             "http://o.test", "tsv", "a" * 64, "task_source",
                             False),
@@ -107,7 +110,10 @@ def _view(**overrides) -> ReportView:
                            # And the same index rounded for prose. Both forms
                            # come from _presentation_forms; a fixture carrying
                            # one but not the other stops describing a real view.
-                           "38%"}),
+                           "38%",
+                           # The exposure spine's widths, one per task, added by
+                           # _presentation_forms for the same reason.
+                           "68%", "25%"}),
         markdown="# report\n")
     base.update(overrides)
     return ReportView(**base)
@@ -482,7 +488,8 @@ def test_an_unidentifiable_percentile_is_never_shown_as_a_number():
     assert "nothing to compare against" in strings
     # And no metric may present our percentile at all -- as 0 or otherwise.
     metrics = [m for b in page(view) if b.kind == "metrics" for m in b.payload]
-    ours = [m for m in metrics if "ranks at" in m["label"]]
+    ours = [m for m in metrics
+            if m["label"] == copy.CALIBRATION_LABELS["ours"]]
     assert not ours, "an unidentifiable percentile was rendered as a metric"
 
 
@@ -492,7 +499,11 @@ def test_an_identifiable_run_does_show_the_delta():
                  figures=frozenset({"80.00", "6.82", "86.82"}))
     metrics = [m for b in page(view) if b.kind == "metrics" for m in b.payload]
     labels = {m["label"] for m in metrics}
-    assert "Our estimate ranks at" in labels and "Difference" in labels
+    assert copy.CALIBRATION_LABELS["ours"] in labels
+    assert copy.CALIBRATION_LABELS["delta"] in labels
+    # And the labels must name the unit. A bare "4.17" is a number with no scale.
+    assert all("percentile" in label.lower()
+               for label in copy.CALIBRATION_LABELS.values())
 
 
 # ===========================================================================
@@ -536,7 +547,12 @@ def test_the_provenance_panel_lists_every_source_with_its_digest():
     tables = [b.payload for b in page(view) if b.kind == "table"]
     flat = " ".join(str(t) for t in tables)
     for source in view.sources:
-        assert source.doc_id in flat
+        # The title, not the doc_id. `onet_task_statements` is our filing key and
+        # names nothing a reader could go and look up; the title does. The key
+        # stays in the downloadable technical report.
+        assert source.title in flat
+        assert source.doc_id not in flat, (
+            f"schema key {source.doc_id!r} reached the client-facing table")
         assert source.sha256[:16] in flat
 
 
@@ -544,7 +560,8 @@ def test_an_unverified_mirror_is_flagged_in_the_ui():
     """Acceptance criterion 8.3."""
     strings = " ".join(displayed_strings(page(_view())))
     assert "Unverified mirror" in strings
-    assert "felten_aioe" in strings
+    assert "AIOE" in strings, "the flagged source must be named readably"
+    assert "felten_aioe" not in strings, "named by its key, not its title"
     assert "Spot-check" in strings
 
 
@@ -562,7 +579,9 @@ def test_every_claim_shows_its_verbatim_quote_and_page():
     for claim in view.claims:
         assert claim.quote in strings
         assert claim.page in strings
-        assert claim.topic in strings
+        # The subject as a phrase, not as the topic key.
+        assert copy.claim_subject(claim.topic) in strings
+        assert claim.topic not in strings
 
 
 def test_the_claim_panel_states_its_binding_granularity():
@@ -951,8 +970,8 @@ def test_the_app_does_not_render_our_percentile_when_unidentifiable(
     if view.calibration_is_identifiable:
         pytest.skip("this run calibrated; the unidentifiable path is not live")
     markup = _document(executed_app)
-    assert "ranks at" not in markup
-    assert "Difference" not in markup
+    assert copy.CALIBRATION_LABELS["ours"] not in markup
+    assert copy.CALIBRATION_LABELS["delta"] not in markup
 
 
 # ===========================================================================
@@ -1101,7 +1120,7 @@ def test_the_in_scope_list_is_shown_before_a_run_is_offered():
                     "tasks": 11}]
     page = request_form_blocks(occupations, "q", RunCost())
     labels = [b.meta.get("label", "") for b in page if b.kind == "expander"]
-    assert any("what we cover" in label.lower() for label in labels)
+    assert any("roles we can assess" in label.lower() for label in labels)
     assert any("Credit Analysts" in t for t in displayed_strings(page))
 
 
@@ -1141,3 +1160,162 @@ def test_every_block_kind_the_form_emits_has_a_renderer():
     dispatcher = _source(UI_MODULE)
     assert '== "request_form"' in dispatcher, (
         "the question box must be a real widget, not markup pretending to be one")
+
+
+# ===========================================================================
+# It has to read as written, not generated
+# ===========================================================================
+
+def test_no_schema_identifier_reaches_the_prose():
+    """The single thing that made the report look machine-generated.
+
+    Nineteen of our own schema keys were on the page --- `review_required`,
+    `provisional_v2_cohort`, `felten_aioe_language_modeling`,
+    `brynjolfsson_productivity_j_curve` --- in captions, in the caveat list, and
+    as the "used for" and "subject" columns of the provenance tables. A reader
+    sees underscored tokens wrapped around numbers and correctly concludes nobody
+    wrote the page.
+
+    The audit footer is exempt and only the audit footer: it exists so a disputed
+    figure can be traced to the exact run, code and policy version that produced
+    it, and those have to be the real keys.
+    """
+    import re
+
+    from app import document
+
+    markup = document.compose(page(_view()))
+    text = re.sub(r"<[^>]+>", chr(10), markup)
+    lines = [line for line in text.splitlines()
+             if "Reference for audit" not in line]
+
+    leaked = sorted({token
+                     for line in lines
+                     for token in re.findall(r"[A-Za-z0-9]+(?:_[A-Za-z0-9]+)+",
+                                             line)})
+    assert not leaked, f"schema identifiers in client-facing prose: {leaked}"
+
+
+def test_the_audit_footer_still_carries_the_real_keys():
+    """Guards the exemption above from becoming a way to hide everything.
+
+    If the footer were humanised too, the test above would pass and the run would
+    no longer be traceable from the page. The exemption exists for this line and
+    has to keep earning it.
+    """
+    strings = " ".join(displayed_strings(page(_view())))
+    assert "Reference for audit" in strings
+    assert "exposure_v1" in strings
+    assert "provisional_v1" in strings
+
+
+def test_the_vocabulary_map_falls_back_rather_than_failing():
+    """A key nobody has written a phrase for must still read as English."""
+    from app import copy as ui_copy
+
+    assert ui_copy.claim_subject("some_new_topic") == "Some new topic"
+    assert ui_copy.used_for("a_new_usage_type") == "A new usage type"
+    # And a mapped one is not merely de-underscored.
+    assert ui_copy.claim_subject("not_prediction") != "Not prediction"
+
+
+def test_the_exposure_spine_is_drawn_for_every_task():
+    """The signature element, and it must cover the table rather than decorate it.
+
+    One rule per task, scaled to that task's net exposure, in the column that
+    feeds the headline share. A spine on some rows and not others would misread as
+    a property of those tasks.
+    """
+    from app import document
+
+    view = _view()
+    markup = document.compose(page(view))
+    assert markup.count('class="spine"') == len(view.tasks)
+    for task in view.tasks:
+        assert f'width:{task.exposure_bar}' in markup
+
+
+def test_every_spine_width_is_a_traced_figure():
+    """The spine is drawn from data, so it is inside the provenance chain.
+
+    Each width is that task's own adjusted score in another unit, computed in the
+    gateway --- which is the tier allowed to compute --- and added to the traced
+    set. Not exempted from the scan: an exemption list is how a figure with no
+    source eventually reaches a page.
+    """
+    view = _view()
+    for task in view.tasks:
+        assert task.exposure_bar in view.figures, (
+            f"spine width {task.exposure_bar} is not a traced figure")
+
+
+def test_the_spine_is_not_drawn_in_the_brand_colour():
+    """A bar in the brand red would say something the number does not.
+
+    Red is the accent: the masthead rule, the section marks, the primary button,
+    and the hardest status. Data is ink. This asserts the spine and the meter both
+    take ink or the structural navy, never the accent.
+    """
+    from app.style import STYLESHEET
+
+    for rule in (".spine > i {", ".meter > i {"):
+        start = STYLESHEET.index(rule)
+        declaration = STYLESHEET[start:STYLESHEET.index("}", start)]
+        assert "var(--red" not in declaration, (
+            f"{rule} is filled with the brand accent: {declaration}")
+
+
+def test_the_palette_is_the_one_the_brief_named():
+    """The colours came from Boston University and Red Key Solutions.
+
+    Pinned as values because a palette is easy to drift away from one edit at a
+    time, and these were read off those two sites rather than invented.
+    """
+    from app.style import STYLESHEET
+
+    for token, value in (("--red:", "#CC0000"),      # BU Red
+                         ("--navy:", "#0C2537"),     # BU secondary
+                         ("--ink:", "#1C1B1A"),      # Red Key near-black
+                         ("--panel:", "#F5F6F8"),    # BU off-white
+                         ("--red-deep:", "#C31420"), # Red Key
+                         ("--rule-firm:", "#DBDBDB")):
+        assert f"{token}     {value}" in STYLESHEET or value in STYLESHEET, (
+            f"{token} is no longer {value}")
+
+
+def test_the_request_form_states_its_cost_beside_the_button():
+    """Cost is decision information, and the decision is made at the button.
+
+    It used to sit inside a "what a run costs" disclosure the reader had to open
+    first. A control that spends money should say so where it is pressed.
+    """
+    from app.contract import RunCost
+    from app.blocks import request_form_blocks
+
+    form = next(b for b in request_form_blocks(
+        [{"soc_code": "13-2051.00", "title": "Analysts", "tasks": 26}],
+        "q", RunCost()) if b.kind == "request_form")
+
+    note = form.payload["cost_note"]
+    assert str(RunCost().calls) in note
+    assert RunCost().duration_text in note
+    # And the reassurance that makes the cost bearable.
+    assert "saved" in note.lower()
+
+
+def test_the_form_asks_before_it_spends():
+    """The confirmation is not decoration; nothing may run without it."""
+    from app.contract import RunCost
+    from app.blocks import request_form_blocks
+
+    form = next(b for b in request_form_blocks(
+        [{"soc_code": "x", "title": "y", "tasks": 1}], "q", RunCost())
+        if b.kind == "request_form")
+    assert form.payload["confirm_label"]
+    assert form.payload["confirm_prompt"]
+
+    dispatcher = Path(UI_MODULE).read_text(encoding="utf-8")
+    assert "if not confirm:" in dispatcher
+    assert dispatcher.index("if not confirm:") < dispatcher.index(
+        'st.session_state["pending_request"] = question')
+

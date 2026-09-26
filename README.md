@@ -716,6 +716,76 @@ Eight sections in the browser, rendering a run that already happened. The findin
 leads, its standing is immediately under it, provenance last, exposure and lag
 never combined.
 
+### Palette and type, from the two sites named in the brief
+
+Read off their stylesheets rather than described from memory. What Boston
+University and Red Key Solutions agree on turned out to be more useful than where
+they differ: both are overwhelmingly white, both carry a single red, both set text
+in a warm near-black rather than pure black, and both keep colour off the body of
+the page entirely.
+
+| Token | Hex | From | Used for |
+|---|---|---|---|
+| `--paper` | `#FFFFFF` | both | the page |
+| `--panel` | `#F5F6F8` | BU off-white (RKS `#F3F4F8`) | finding panel, request card |
+| `--ink` | `#1C1B1A` | Red Key near-black | body text, **data bars** |
+| `--navy` | `#0C2537` | BU secondary | headings, meter fill, focus ring |
+| `--red` | `#CC0000` | **BU Red** | masthead rule, section marks, primary button |
+| `--red-deep` | `#C31420` | Red Key | button hover, "not fit to use" |
+
+Red appears in exactly four places and nowhere else. In particular **the data bars
+are ink, never red** — a bar in the brand's red reads as an alarm, which tells the
+reader something about the number that the number does not say.
+`test_the_spine_is_not_drawn_in_the_brand_colour` parses those two declarations and
+fails if either takes the accent.
+
+Type inverts the usual pairing deliberately: **Libre Franklin**, an American
+institutional gothic in the register both reference sites are written in, sets the
+masthead and headings, because a headline here is signage. **Source Serif** carries
+the argument, because a case a reader has to weigh should read like prose and not
+like an interface. **IBM Plex Mono** with tabular figures sets every quantity.
+
+### The exposure spine
+
+Each row of the per-task table carries a short ink rule scaled to that task's net
+exposure, so the **shape** of the distribution is visible instead of being
+assembled from 26 decimals. That shape is the claim the rubric exists to support —
+it discriminates rather than saturates, which is why this occupation was chosen.
+
+The widths are computed in the gateway, not the presentation tier, and join the
+traced figure set like any other number: a layer that can compute can produce a
+figure that is on no source, and the test that walks the page for untraceable
+numbers would have nothing to catch it with. Building it also closed a real blind
+spot — `displayed_strings` skipped list values inside a block payload, so the
+widths would have reached the page without passing the scan.
+
+### It has to read as written, not generated
+
+Nineteen of our own schema keys were on the page — `review_required`,
+`provisional_v2_cohort`, `felten_aioe_language_modeling`,
+`brynjolfsson_productivity_j_curve` — in captions, in the caveat list, and as the
+"used for" and "subject" columns of the provenance tables. A reader sees
+underscored tokens wrapped around numbers and correctly concludes nobody wrote the
+page.
+
+`app/copy.py` now holds a vocabulary map: a named phrase where the identifier
+deserves one, and a general fallback otherwise, because a bare `replace("_", " ")`
+gives "Not prediction" and "J curve definition" — readable, and not written. The
+provenance table shows each source's **title** rather than its filing key, and the
+lag disclosure states how many historical passages the interval rests on rather
+than printing their claim IDs.
+
+It is a vocabulary map, not a rewrite: the findings are untouched, and the
+downloadable technical report still carries every identifier verbatim, because a
+figure under dispute has to be traceable by its real key. The one exempt line on
+the page is the audit footer, and `test_the_audit_footer_still_carries_the_real_keys`
+stops that exemption from becoming a way to hide everything.
+
+Writing this also caught me inventing two figures — a citation year and a
+population count typed into a copy string, neither traceable to a source this run
+consumed. The traceability check rejected them and they were removed rather than
+exempted.
+
 ### A document, not a dashboard
 
 The first version styled Streamlit's widgets and lost. Every `st.metric` and

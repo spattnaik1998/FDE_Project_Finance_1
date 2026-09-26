@@ -119,18 +119,14 @@ def request_form_blocks(occupations, default_question: str,
             "label": copy.FORM_LABEL,
             "submit_label": copy.FORM_SUBMIT,
             "confirm_label": copy.FORM_CONFIRM,
+            "confirm_prompt": copy.FORM_CONFIRM_PROMPT,
+            "cost_note": copy.form_cost(cost),
         }),
         _b("expander", [
-            _b("markdown",
-               "These are the roles we currently hold task data for. Ask about "
-               "anything else and the system says so rather than answering "
-               "about a role that merely looks similar."),
+            _b("markdown", copy.COVERAGE_INTRO),
             _b("table", {"columns": ["Role", "Occupation code", "Tasks held"],
                          "rows": rows}),
-            _b("caption", copy.form_cost(cost)),
-        ], label=f"What we cover, and what a run costs "
-                 f"({len(rows)} roles available)"),
-        _b("divider"),
+        ], label=f"The {len(rows)} roles we can assess"),
     ]
 
 
@@ -222,7 +218,7 @@ def standing_blocks(view: ReportView) -> list[Block]:
                          label="Why the independent check was inconclusive"))
 
     if view.unverified_mirrors:
-        names = ", ".join(f"`{s.doc_id}`" for s in view.unverified_mirrors)
+        names = ", ".join(s.title for s in view.unverified_mirrors)
         blocks.append(_b(
             "callout",
             f"**Unverified mirror in the evidence chain:** {names}. The "
@@ -251,18 +247,19 @@ def exposure_blocks(view: ReportView) -> list[Block]:
         _b("callout", copy.EXPOSURE_NOT, tone="info"),
         _b("expander", [
             _b("markdown", copy.EXPOSURE_METHOD),
-            _b("caption", f"Index {view.exposure_index} on a 0–1 scale. "
-                          f"{view.weighting_note}"),
+            _b("caption", f"The index is {view.exposure_index} on a 0–1 scale."),
+            _b("caption", view.weighting_note),
         ], label=copy.METHOD_LABEL),
     ]
 
 
 def lag_blocks(view: ReportView) -> list[Block]:
+    # No "Basis:" prefix: the stored string already opens with its own label,
+    # and the two together read "Basis: Observed trajectory: ...".
     method = [_b("markdown", copy.LAG_METHOD),
-              _b("caption", f"Basis: {view.lag_basis}")]
+              _b("caption", view.lag_basis)]
     if view.lag_grounding:
-        method.append(_b("caption",
-                         f"Historical grounding: {view.lag_grounding}"))
+        method.append(_b("caption", copy.lag_grounding_note(view)))
     return [
         _b("heading", copy.HEADINGS["lag"]),
         # A span with no track, deliberately unlike exposure's meter. The lag is
@@ -283,8 +280,7 @@ def calibration_blocks(view: ReportView) -> list[Block]:
     blocks = [_b("heading", copy.HEADINGS["calibration"])]
     if not view.calibration_is_identifiable:
         blocks.append(_b("markdown", copy.CALIBRATION_NOT_IDENTIFIABLE))
-        blocks.append(_b("caption",
-                         f"Benchmark measure on file: {view.benchmark_measure}"))
+        blocks.append(_b("caption", copy.BENCHMARK_ON_FILE))
         return blocks
 
     if view.calibration_outcome == "pass":
@@ -294,15 +290,16 @@ def calibration_blocks(view: ReportView) -> list[Block]:
                          copy.calibration_answer_inconclusive(view)))
     # The three percentiles stay on the page. A reader who was told the check
     # was inconclusive is owed the numbers it was inconclusive about.
+    labels = copy.CALIBRATION_LABELS
     blocks.append(_b("metrics", [
-        {"label": "Our estimate ranks at", "value": view.our_percentile},
-        {"label": "Published index ranks it at",
-         "value": view.benchmark_percentile},
-        {"label": "Difference", "value": view.delta},
+        {"label": labels["ours"], "value": view.our_percentile},
+        {"label": labels["benchmark"], "value": view.benchmark_percentile},
+        {"label": labels["delta"], "value": view.delta},
     ]))
-    blocks.append(_b("caption",
-                     f"Compared within a cohort of finance occupations · "
-                     f"policy {view.calibration_policy_version}"))
+    # One sentence, not two saying the same thing. The caption used to read
+    # "Compared within a cohort of finance occupations. Calibration is
+    # provisional, compared within a finance cohort." -- the same fact twice.
+    blocks.append(_b("caption", copy.CALIBRATION_SCALE))
     return blocks
 
 
@@ -332,7 +329,10 @@ def task_table_blocks(view: ReportView) -> list[Block]:
                         cols["confidence"]],
             "rows": [[t.statement, t.raw, t.tacit, t.adjusted, t.direction,
                       t.confidence] for t in view.tasks],
-        }),
+        },
+           # Drawn in the "Net exposure" column, which is the one that feeds the
+           # headline share. The widths come pre-formatted from the gateway.
+           bars=[t.exposure_bar for t in view.tasks], bar_column=3),
         _b("expander", [_b("markdown", copy.TASKS_METHOD)],
            label=copy.METHOD_LABEL),
     ]
@@ -344,7 +344,7 @@ def limitations_blocks(view: ReportView) -> list[Block]:
         _b("markdown", copy.LIMITS_INTRO),
     ]
     for caveat in view.caveats:
-        blocks.append(_b("markdown", f"- {caveat}"))
+        blocks.append(_b("markdown", f"- {copy.plain_caveat(caveat)}"))
     return blocks
 
 
@@ -363,10 +363,12 @@ def provenance_blocks(view: ReportView) -> list[Block]:
              "value": "yes" if view.trace_customer_deliverable else "no"},
         ]),
         _b("table", {
-            "columns": ["Source", "What it is", "Format", "Used for",
-                        "Fingerprint"],
-            "rows": [[f"{s.doc_id}{' (mirror)' if s.is_unverified_mirror else ''}",
-                      s.publisher, s.format, s.used_as, s.short_digest]
+            "columns": ["Source", "Published by", "Used for", "Fingerprint"],
+            # The title, not the doc_id. `onet_task_statements` is our filing key
+            # and means nothing to a reader; "O*NET Task Statements" is the thing
+            # they could go and look up. The key stays in the technical report.
+            "rows": [[f"{s.title}{' (copy, unverified)' if s.is_unverified_mirror else ''}",
+                      s.publisher, copy.used_for(s.used_as), s.short_digest]
                      for s in view.sources],
         }),
     ]
@@ -376,9 +378,12 @@ def provenance_blocks(view: ReportView) -> list[Block]:
             _b("markdown", copy.CLAIMS_INTRO),
             _b("caption", copy.CLAIMS_GRANULARITY),
             _b("table", {
-                "columns": ["Subject", "Page", "What the source says",
-                            "Document"],
-                "rows": [[c.topic, c.page, c.quote, c.source_doc_id]
+                "columns": ["Subject", "Page", "What the source says"],
+                # The document column is dropped rather than shown as a key: the
+                # source table above already lists every document, and a column
+                # of `brynjolfsson_productivity_j_curve` earned its space only as
+                # a join key for us.
+                "rows": [[copy.claim_subject(c.topic), c.page, c.quote]
                          for c in view.claims],
             }),
         ]
@@ -390,11 +395,15 @@ def provenance_blocks(view: ReportView) -> list[Block]:
         _b("expander", [_b("markdown", copy.PROVENANCE_METHOD)],
            label=copy.METHOD_LABEL),
         _b("divider"),
+        # Kept verbatim, and labelled as what it is. A reader does not need
+        # these; the person they forward a query to does, and a figure under
+        # dispute has to be traceable to the exact run and code that made it.
         _b("caption",
-           f"Run `{view.run_id}` · code `{view.git_sha[:12]}` · rubric "
-           f"`{view.rubric_version}` · calibration policy "
-           f"`{view.calibration_policy_version}` · customer deliverable "
-           f"`{view.is_customer_deliverable}`"),
+           f"Reference for audit — run {view.run_id} · code "
+           f"{view.git_sha[:12]} · rubric {view.rubric_version} · "
+           f"calibration policy {view.calibration_policy_version} · "
+           f"cleared for external use: "
+           f"{'yes' if view.is_customer_deliverable else 'no'}"),
         _b("download", view.markdown,
            label="Download the full technical report (Markdown)",
            file_name=f"exposure_{view.soc_code}_{view.run_id[:8]}.md"),
@@ -479,6 +488,13 @@ def displayed_strings(blocks: list[Block]) -> list[str]:
                     continue
                 if isinstance(value, (str, int, float)):
                     out.append(str(value))
+                elif isinstance(value, (list, tuple)):
+                    # A list of scalars was invisible here, which would have let
+                    # the exposure spine's widths onto the page without passing
+                    # the traceability scan -- a blind spot in exactly the shape
+                    # of the one this check exists to close.
+                    out.extend(str(item) for item in value
+                               if isinstance(item, (str, int, float)))
         for value in block.meta.values():
             out.append(str(value))
     return out

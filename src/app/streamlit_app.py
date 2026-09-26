@@ -68,17 +68,25 @@ def render_block(block: blocks_module.Block) -> None:
     if kind == "request_form":
         # The request half of the TDD 1.1 contract. Collects a question and
         # nothing else; scope resolution belongs to the Intent & Scope node.
+        #
+        # Laid out as a card rather than a stack of framework widgets: the cost
+        # of a run sits beside the button, because a control that spends money
+        # should say so where the decision is made and not inside a disclosure
+        # the reader has to open first.
         with st.form("run_request", clear_on_submit=False):
             question = st.text_area(payload["label"],
                                     value=payload["default_question"],
-                                    height=90, max_chars=500)
+                                    height=92, max_chars=500)
             confirm = st.checkbox(payload["confirm_label"], value=False)
-            submitted = st.form_submit_button(payload["submit_label"],
-                                              type="primary")
+            left, right = st.columns([1, 2], vertical_alignment="center")
+            with left:
+                submitted = st.form_submit_button(payload["submit_label"],
+                                                  type="primary")
+            with right:
+                st.html(f'<p class="run-cost">{payload["cost_note"]}</p>')
         if submitted:
             if not confirm:
-                st.warning("Please tick the box before running. A button that "
-                           "quietly spends money is not one to trust.")
+                st.warning(payload["confirm_prompt"])
             else:
                 st.session_state["pending_request"] = question
                 st.rerun()

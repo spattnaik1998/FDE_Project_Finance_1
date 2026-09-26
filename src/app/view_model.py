@@ -34,6 +34,10 @@ class TaskRowView:
     adjusted: str
     direction: str
     confidence: str
+    # The net exposure as a CSS width, so the table can show the shape of the
+    # distribution without the presentation layer computing anything. Formatted
+    # by the gateway, which is the tier that already holds the traced figures.
+    exposure_bar: str = "0%"
 
 
 @dataclass(frozen=True)
@@ -101,7 +105,7 @@ class ReportView:
     lag_p50: str
     lag_p90: str
     lag_basis: str
-    lag_grounding: str
+    lag_grounding: str        # raw claim IDs; the join keys, not for a reader
     curve_fitted: bool
 
     calibration_outcome: str
@@ -149,6 +153,22 @@ class ReportView:
             return f"{float(self.exposure_index) * 100:.1f}%"
         except (TypeError, ValueError):
             return "0%"
+
+    @property
+    def lag_grounding_count(self) -> str:
+        """How many historical passages the interval rests on.
+
+        The raw ``lag_grounding`` string is a comma-separated list of claim IDs
+        like ``brynjolfsson_productivity_j_curve:lag_length:6:0:v2``. Those are
+        join keys. Printing them in a client-facing disclosure --- which is what
+        the page did --- is the clearest possible signal that nobody wrote this
+        page, so the reader gets the count and the appendix carries the wording.
+        """
+        if not self.lag_grounding:
+            return "0"
+        return str(len([part for part in self.lag_grounding.split(",")
+                        if part.strip()]))
+
 
     @property
     def exposure_share_text(self) -> str:

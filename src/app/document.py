@@ -214,15 +214,29 @@ def _table(payload, meta) -> str:
     numeric = [bool(rows) and all(_is_numeric(row[i]) for row in rows)
                for i in range(len(columns))]
 
+    # The exposure spine. `bars` is a parallel list of CSS widths, one per row,
+    # and `bar_column` says which cell carries it. Parallel rather than a seventh
+    # column because it is not a value -- it is the same value in the cell it sits
+    # in, drawn, so the reader sees the shape of the distribution rather than
+    # reading 26 decimals and building it in their head. That shape is the claim
+    # the rubric exists to support: it discriminates instead of saturating.
+    bars = list(meta.get("bars") or [])
+    bar_column = meta.get("bar_column")
+
     head = "".join(
         f'<th class="{"num" if numeric[i] else "txt"}">{esc(c)}</th>'
         for i, c in enumerate(columns))
     body = []
-    for row in rows:
-        cells = "".join(
-            f'<td class="{"num" if numeric[i] else "txt"}">{_inline(cell)}</td>'
-            for i, cell in enumerate(row))
-        body.append(f"<tr>{cells}</tr>")
+    for index, row in enumerate(rows):
+        cells = []
+        for i, cell in enumerate(row):
+            spine = ""
+            if i == bar_column and index < len(bars):
+                spine = (f'<span class="spine">'
+                         f'<i style="width:{esc(bars[index])}"></i></span>')
+            cells.append(f'<td class="{"num" if numeric[i] else "txt"}">'
+                         f'{spine}{_inline(cell)}</td>')
+        body.append(f'<tr>{"".join(cells)}</tr>')
     return (f'<div class="table-wrap"><table>'
             f"<thead><tr>{head}</tr></thead>"
             f'<tbody>{"".join(body)}</tbody></table></div>')

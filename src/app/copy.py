@@ -77,8 +77,8 @@ STANDING = {
 # the sentence that most needed rewriting: the original talked about ranks within
 # distributions, which is the mechanism, not the consequence.
 WHY_INCONCLUSIVE = (
-    "We compare our estimate against a published academic index of AI exposure "
-    "(Felten, Raj and Seamans, 2021). That index was built to separate very "
+    "We compare our estimate against a published academic index of AI exposure, "
+    "by Felten, Raj and Seamans. That index was built to separate very "
     "different occupations across the whole economy — a software engineer from a "
     "lorry driver. Inside a single family of finance roles it barely varies, so "
     "it cannot tell us whether we have ranked *these twelve finance jobs* "
@@ -101,9 +101,11 @@ WHY_UNIDENTIFIABLE = (
 def exposure_answer(view) -> str:
     """One sentence a reader can repeat, then the misreading it prevents."""
     return (
-        f"Roughly **{view.exposure_share_text} of this role's day-to-day tasks** "
-        f"are the kind of work current AI tools can already perform — drafting, "
-        f"summarising, pulling and formatting data, routine analysis.")
+        f"The exposed work is drafting, summarising, pulling and formatting "
+        f"data, and routine valuation — **{view.exposure_share_text} of the "
+        f"role's published tasks**. What is left is the part that depends on "
+        f"reading a management team, judging which number in a filing matters, "
+        f"and being in the room.")
 
 
 EXPOSURE_NOT = (
@@ -197,20 +199,35 @@ def provenance_summary(view) -> str:
 # The request form
 # ---------------------------------------------------------------------------
 
-FORM_HEADING = "Ask about a role"
+FORM_HEADING = "Ask about another role"
 FORM_INTRO = (
-    "Describe the role in your own words. If we do not hold the data to answer "
-    "properly, the system says so rather than guessing at a similar job."
+    "Describe the role in your own words. If we do not hold the task data to "
+    "answer properly, you get told so — not an answer about a role that merely "
+    "looks similar."
 )
-FORM_LABEL = "Which role do you want assessed?"
+FORM_LABEL = "Which role should we assess?"
 FORM_SUBMIT = "Run the analysis"
 FORM_CONFIRM = "I understand this runs a live analysis"
+FORM_CONFIRM_PROMPT = (
+    "Tick the box first. A button that quietly spends money is not one to trust."
+)
+
+COVERAGE_INTRO = (
+    "These are the roles we hold published task data for. Anything else is "
+    "refused rather than approximated, and a refusal costs a run."
+)
 
 
 def form_cost(cost) -> str:
-    return (f"Each run takes {cost.duration_text} and queries AI models about "
-            f"{cost.calls} times. Results are saved, so you can revisit them "
-            f"without re-running.")
+    """Stated beside the button, not inside a disclosure.
+
+    Cost is decision information, and the decision is made at the button. Two
+    sentences: what it costs, and the reassurance that makes the cost bearable
+    --- the result is saved, so nobody pays twice to look at it again.
+    """
+    return (f"One run takes {cost.duration_text} and queries AI models about "
+            f"{cost.calls} times. The result is saved, so you can come back to "
+            f"it without paying for it twice.")
 
 
 REFUSAL_HEADING = "We cannot answer that one yet"
@@ -243,6 +260,22 @@ LAG_METHOD = (
     "manufacture precision the evidence cannot support. Instead we report the "
     "observed trajectory alongside the historical range for comparable "
     "technology shifts, and give a wide interval on purpose."
+)
+
+# The three calibration figures are percentile ranks, and the labels have to say
+# so. "Our estimate ranks at 4.17" gives a reader a number with no unit and no
+# scale; a percentile within a named cohort of twelve is a statement they can
+# check against their own intuition.
+CALIBRATION_LABELS = {
+    "ours": "Our percentile rank",
+    "benchmark": "Benchmark's percentile rank",
+    "delta": "Gap, in percentile points",
+}
+
+CALIBRATION_SCALE = (
+    "Both ranks are percentiles within the same twelve finance occupations, so "
+    "0 is the least exposed of the twelve and 100 the most. Ranking our score "
+    "against a population we did not assess would not be a comparison."
 )
 
 CALIBRATION_ANSWER_YES = (
@@ -355,4 +388,118 @@ MASTHEAD_NOTE = (
     "never blended into one score, because a capability existing and a business "
     "being reorganised around it are different events years apart."
 )
+
+
+# ---------------------------------------------------------------------------
+# Vocabulary: machine identifiers, said in English
+# ---------------------------------------------------------------------------
+#
+# Nineteen identifiers were reaching the page --- `review_required`,
+# `provisional_v2_cohort`, `felten_aioe_language_modeling`,
+# `brynjolfsson_productivity_j_curve` --- in captions, in the caveat list, and as
+# the "used for" and "subject" columns of the provenance tables. Every one is a
+# key in our own schema. A client reads them as noise, and they are the single
+# thing that made the report look machine-generated rather than written.
+#
+# This is a vocabulary map, not a rewrite. The underlying findings are untouched
+# and the technical report still carries the identifiers verbatim, because a
+# figure that a reader may need to trace back to a row should be traceable by its
+# real key. What changes is which vocabulary the *page* speaks.
+#
+# A named phrase where the identifier deserves one, and a general fallback for
+# the rest, because a bare `.replace("_", " ")` gives "Not prediction" and "J
+# curve definition" --- readable, and not written.
+
+def lag_grounding_note(view) -> str:
+    return (f"The historical comparison rests on {view.lag_grounding_count} "
+            f"passages from the published record. Each one is quoted in full, "
+            f"with its page, at the end of this report.")
+
+
+# No year and no population count in this sentence, and that is not an oversight.
+# Both were in the first draft and the traceability check rejected them: a figure
+# on the page has to trace to a source this run actually consumed, and a citation
+# year typed into a copy string traces to nothing. The provenance table carries
+# the publisher and the digest, which is where a reader should get it from.
+BENCHMARK_ON_FILE = (
+    "The benchmark we compare against is the AI Occupational Exposure index "
+    "published by Felten, Raj and Seamans, which scores US occupations for "
+    "exposure to language modelling. It is listed in the sources below."
+)
+
+USED_FOR = {
+    "task_source": "The role's task list",
+    "exposure_benchmark": "Independent benchmark",
+    "claim_evidence": "Quoted evidence",
+    "adoption_evidence": "Adoption rates",
+    "industry_metric": "Industry statistics",
+    "lag_evidence": "Timetable evidence",
+}
+
+CLAIM_SUBJECT = {
+    "lag_length": "How long the lag runs",
+    "j_curve_definition": "Why gains arrive late",
+    "not_prediction": "Why no date is forecast",
+    "exposure_definition": "What exposure measures",
+    "exposure_share": "Share of work exposed",
+    "occupation_level": "Evidence at the job level",
+    "intangible_complement": "The investment that must come first",
+    "btos_sector": "How fast finance is adopting",
+    "productivity_paradox": "Why measured gains lag",
+    "task_content": "What the work consists of",
+    "tacit_knowledge": "Judgement that cannot be written down",
+    "skill_bias": "Who gains and who loses",
+}
+
+# Statuses and versions. The first two are the ones a client actually sees.
+STATUS_WORDS = {
+    "passed": "checked and consistent",
+    "review_required": "independent check inconclusive",
+    "gate_rejected": "failed its own quality checks",
+    "failed": "did not finish",
+}
+
+POLICY_WORDS = {
+    "provisional_v1": "provisional, single-occupation",
+    "provisional_v2_cohort": "provisional, compared within a finance cohort",
+}
+
+
+def humanise(identifier: str) -> str:
+    """A snake_case key as a readable phrase. Sentence case, no underscores."""
+    words = str(identifier).replace("_", " ").strip()
+    return words[:1].upper() + words[1:] if words else words
+
+
+def used_for(key: str) -> str:
+    return USED_FOR.get(key, humanise(key))
+
+
+def claim_subject(key: str) -> str:
+    return CLAIM_SUBJECT.get(key, humanise(key))
+
+
+def plain_status(status: str) -> str:
+    return STATUS_WORDS.get(status, humanise(status))
+
+
+def plain_policy(version: str) -> str:
+    return POLICY_WORDS.get(version, humanise(version))
+
+
+def plain_caveat(caveat: str) -> str:
+    """A persisted caveat with our status vocabulary translated.
+
+    The caveat text itself is a finding and is not rewritten --- the presentation
+    tier has no business editing one. What it does is swap the status token for
+    the phrase that means the same thing, so a client-facing limitation does not
+    open with `review_required:`.
+    """
+    text = str(caveat)
+    for token, phrase in STATUS_WORDS.items():
+        text = text.replace(f"{token}:", f"{phrase} —")
+        text = text.replace(f" {token}", f" {phrase}")
+    for token, phrase in POLICY_WORDS.items():
+        text = text.replace(token, phrase)
+    return text
 
