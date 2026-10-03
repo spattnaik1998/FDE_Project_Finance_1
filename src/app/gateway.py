@@ -24,8 +24,8 @@ from report import provenance, reader, render
 from report.reader import ReportData
 
 from app import copy as ui_copy
-from app.view_model import (ClaimView, ReportView, SourceView, StandingView,
-                            TaskRowView)
+from app.view_model import (ClaimView, CohortRowView, CohortView, ReportView,
+                            SourceView, StandingView, TaskRowView)
 
 LOG = logging.getLogger("app.gateway")
 
@@ -293,6 +293,158 @@ def in_scope_occupations(*, database: str | None = None) -> list[dict]:
             GROUP BY o.soc_code, o.title
             ORDER BY o.title""").fetchall()
     return [{"soc_code": r[0], "title": r[1], "tasks": int(r[2])} for r in rows]
+
+
+class NoCohortAvailable(LookupError):
+    """No reference set exists for this classifier and rubric."""
+
+
+def load_cohort(*, classifier: str | None = None,
+                database: str | None = None) -> CohortView:
+    """The portfolio view: every role in one reference set, ranked.
+
+    Reads ``score.cohort_index`` for a single
+    ``(cohort, classifier, rubric_version)`` key and nothing else. Mixing
+    classifiers is not offered as an option, because a reference set scored by
+    two methods is not one cohort and a ranking drawn across a mixture would
+    measure which model scored which occupation.
+
+    ``is_current = 1`` because the table is append-only: a superseded derivation
+    is still present, and ranking across versions would put one occupation in
+    the distribution twice.
+
+    Degrades by raising rather than by returning a short list. A portfolio view
+    missing four of its twelve rows still looks like a portfolio view, which is
+    the failure mode worth refusing.
+    """
+    from scoring.cohort import DEFAULT_COHORT
+    from scoring.run import RUBRIC_VERSION
+    from warehouse.session import Principal, connect
+
+    classifier = classifier or config.MODEL_CLASSIFIER
+
+    with connect(Principal.SCORE, database=database) as conn:
+        cursor = conn.cursor()
+        rows = cursor.execute("""
+            SELECT c.soc_code, o.title, c.exposure_index, c.tasks_scored
+            FROM score.cohort_index c
+            JOIN ref.occupation o ON o.soc_code = c.soc_code
+            WHERE c.is_current = 1 AND c.cohort_name = ?
+              AND c.classifier = ? AND c.rubric_version = ?
+            ORDER BY c.exposure_index DESC""",
+            DEFAULT_COHORT, classifier, RUBRIC_VERSION).fetchall()
+        if not rows:
+            raise NoCohortAvailable(
+                f"No reference set for cohort {DEFAULT_COHORT!r} under "
+                f"classifier {classifier!r} and rubric {RUBRIC_VERSION!r}. "
+                f"Score the cohort first: "
+                f"`python scripts/score_cohort.py --classifier model --persist`.")
+
+        # Which occupations can actually be opened. Derived from what is
+        # persisted, never assumed from cohort membership: a cohort row is one
+        # number, while a drill-down needs a verdict and its task scores.
+        drillable = {r[0] for r in cursor.execute("""
+            SELECT DISTINCT v.soc_code FROM score.role_verdict v
+            WHERE EXISTS (SELECT 1 FROM score.task_score s
+                          WHERE s.run_id = v.run_id)""").fetchall()}
+
+        # The hero figure, counted over the whole reference set rather than one
+        # run, and over CURRENT task rows only.
+        tasks_assessed = cursor.execute("""
+            SELECT COUNT(*) FROM core.task t
+            WHERE t.is_current = 1 AND t.soc_code IN (
+                SELECT soc_code FROM score.cohort_index
+                WHERE is_current = 1 AND cohort_name = ?
+                  AND classifier = ? AND rubric_version = ?)""",
+            DEFAULT_COHORT, classifier, RUBRIC_VERSION).fetchone()[0]
+
+        # Scoped to the LATEST run per occupation under THIS classifier.
+        #
+        # A bare `COUNT(*) WHERE direction = 'substitute'` was the first cut and
+        # it returned 6: a sum across five runs, three occupations and two
+        # models, which against a 231-task denominator is three different
+        # populations in one ratio. The denominator and the role count travel
+        # with the number so the page cannot present it as a portfolio finding.
+        scoped = cursor.execute("""
+            WITH latest AS (
+              SELECT v.soc_code, v.run_id,
+                     ROW_NUMBER() OVER (PARTITION BY v.soc_code
+                                        ORDER BY v.created_at DESC) AS rn
+              FROM score.role_verdict v
+              JOIN score.task_score s ON s.run_id = v.run_id AND s.model = ?
+              GROUP BY v.soc_code, v.run_id, v.created_at)
+            SELECT COUNT(DISTINCT l.soc_code), COUNT(*),
+                   SUM(CASE WHEN s.direction = 'substitute' THEN 1 ELSE 0 END)
+            FROM latest l JOIN score.task_score s ON s.run_id = l.run_id
+            WHERE l.rn = 1""", classifier).fetchone()
+        sub_roles, sub_of, sub_count = (int(scoped[0] or 0), int(scoped[1] or 0),
+                                        int(scoped[2] or 0))
+
+        # The lag, read once. Asserted single-valued rather than averaged: it is
+        # estimated from sector-level adoption evidence, so it does not vary by
+        # occupation, and a mean over identical values would imply it could.
+        lags = cursor.execute("""
+            SELECT DISTINCT lag_years_p10, lag_years_p50, lag_years_p90
+            FROM score.role_verdict""").fetchall()
+
+    if len(lags) != 1:
+        LOG.warning("cohort=%s status=lag_not_single_valued distinct=%s",
+                    DEFAULT_COHORT, len(lags))
+    lag = lags[0] if len(lags) == 1 else (None, None, None)
+
+    indices = [float(r[2]) for r in rows]
+    cohort_rows = tuple(
+        CohortRowView(
+            soc_code=r[0], title=r[1],
+            exposure_index=f"{float(r[2]):.3f}",
+            tasks_scored=str(int(r[3])),
+            has_full_run=r[0] in drillable,
+            bar_percent=_bar(r[2]))
+        for r in rows)
+
+    view = CohortView(
+        cohort_name=DEFAULT_COHORT, classifier=classifier,
+        rubric_version=RUBRIC_VERSION, rows=cohort_rows,
+        roles_assessed=str(len(cohort_rows)),
+        tasks_assessed=str(int(tasks_assessed)),
+        substitutable_count=str(sub_count), substitutable_of=str(sub_of),
+        substitutable_roles=str(sub_roles),
+        exposure_low=f"{min(indices):.3f}", exposure_high=f"{max(indices):.3f}",
+        most_exposed_title=cohort_rows[0].title,
+        least_exposed_title=cohort_rows[-1].title,
+        lag_p10=_fmt_lag(lag[0]), lag_p50=_fmt_lag(lag[1]),
+        lag_p90=_fmt_lag(lag[2]),
+        drillable_roles=str(len(drillable & {r[0] for r in rows})),
+        figures=_cohort_figures(cohort_rows, indices, tasks_assessed,
+                                (sub_count, sub_of, sub_roles), lag))
+
+    LOG.info("cohort=%s classifier=%s rows=%s drillable=%s tasks=%s",
+             DEFAULT_COHORT, classifier, len(cohort_rows),
+             view.drillable_roles, tasks_assessed)
+    return view
+
+
+def _fmt_lag(value) -> str:
+    return ABSENT if value is None else f"{float(value):.1f}"
+
+
+def _cohort_figures(rows, indices, tasks_assessed, substitution,
+                    lag) -> frozenset[str]:
+    """Every literal the portfolio page is allowed to display.
+
+    Same contract as the report's registry: a number the page shows that is not
+    in here is a figure with no provenance, and the test that walks the rendered
+    page will reject it. The bar widths are included for the reason the task
+    spine's were -- each is that occupation's own index in another unit.
+    """
+    figures = {r.exposure_index for r in rows}
+    figures |= {r.tasks_scored for r in rows}
+    figures |= {r.bar_percent for r in rows}
+    figures |= {f"{min(indices):.3f}", f"{max(indices):.3f}"}
+    figures |= {str(len(rows)), str(int(tasks_assessed))}
+    figures |= {str(int(v)) for v in substitution}
+    figures |= {_fmt_lag(v) for v in lag}
+    return frozenset(figures)
 
 
 def submit(request, *, database: str | None = None) -> "SubmissionResult":

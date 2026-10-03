@@ -81,6 +81,86 @@ class StandingView:
 
 
 @dataclass(frozen=True)
+class CohortRowView:
+    """One occupation in the portfolio view, pre-formatted.
+
+    ``has_full_run`` is the field the page design turns on. Nine of the twelve
+    cohort members exist only as a single persisted index: no task scores, no
+    caveats, no source bindings. A row without a full run cannot be opened, and
+    the page has to say so rather than offer a click that does nothing.
+    """
+
+    soc_code: str
+    title: str
+    exposure_index: str
+    tasks_scored: str
+    has_full_run: bool
+    # The index as a CSS width for the ranking chart, formatted by the gateway.
+    # The presentation tier is forbidden arithmetic by test, so a bar's geometry
+    # has to arrive pre-computed and already inside the traced figure set.
+    bar_percent: str = "0%"
+
+
+@dataclass(frozen=True)
+class CohortView:
+    """The portfolio answer: every scored role in one reference set.
+
+    Everything built before this answered the customer's question one role at a
+    time. The question was "which of our cost *lines*", plural, and this is the
+    object that answers it.
+
+    The whole view comes from ONE ``(cohort, classifier, rubric_version)`` key.
+    That is not a convenience: a reference set scored by two classifiers is not
+    one cohort, and a ranking drawn across a mixture would be an artefact of
+    which model happened to score which occupation.
+    """
+
+    cohort_name: str
+    classifier: str
+    rubric_version: str
+    rows: tuple[CohortRowView, ...]
+
+    # KPI tiles. Counts and identities only -- see the spec for why no average
+    # of exposure across occupations appears here.
+    roles_assessed: str
+    tasks_assessed: str
+    # The substitution finding, carrying its own denominator and scope.
+    #
+    # The spec proposed a hero figure of "0 of 231 tasks judged outright
+    # replaceable". That number is not available from this warehouse and the
+    # first cut produced "6 of 231", which was a sum across five runs, three
+    # occupations and two different models over a denominator of 231 that
+    # includes nine roles never scored at task level. Three incompatible
+    # populations in one ratio.
+    #
+    # scripts/score_cohort.py persists only the TARGET occupation's task
+    # scores; the other eleven cohort members contribute a single index each.
+    # So task-level direction exists for a few roles, not twelve, and the type
+    # now carries that limit instead of letting the page imply otherwise.
+    substitutable_count: str          # substitute judgments
+    substitutable_of: str             # ...out of this many scored tasks
+    substitutable_roles: str          # ...across this many roles examined in depth
+    exposure_low: str
+    exposure_high: str
+    most_exposed_title: str
+    least_exposed_title: str
+
+    # The lag is a SECTOR quantity, identical across all persisted verdicts,
+    # so it is one page-level figure and never a per-row column. Scalars here,
+    # deliberately not on CohortRowView, so the type makes the mistake hard.
+    lag_p10: str
+    lag_p50: str
+    lag_p90: str
+
+    drillable_roles: str
+    figures: frozenset[str] = field(default_factory=frozenset)
+
+    @property
+    def rows_with_full_run(self) -> tuple[CohortRowView, ...]:
+        return tuple(r for r in self.rows if r.has_full_run)
+
+
+@dataclass(frozen=True)
 class ReportView:
     """Everything the UI is allowed to display.
 
