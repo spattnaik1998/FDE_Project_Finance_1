@@ -246,6 +246,27 @@ pre-computed coordinates as strings.
 fails on any arithmetic operator, mirroring the existing rule. Every coordinate
 appears in `view.figures`.
 
+**Status: complete.** `app/geometry.py` computes, `app/charts.py` emits, 36 tests
+in `tests/test_charts.py`. Primitives: `bar_rows`, `line_series`,
+`dumbbell_rows`, `legend`, `axis_note`, `table_view`.
+
+One correction to the acceptance criterion. "Every coordinate appears in
+`view.figures`" was wrong, and the first implementation obeyed it literally:
+pixel lengths like `246.2` went into the traced set, each a datum multiplied by
+an arbitrary plot width, which no reader can read and which floods the traced set
+with numbers nobody can check.
+
+`ChartGeometry` now separates the two. **`figures`** are the values printed as
+text, which must already be traceable; **`layout`** are the positions marks sit
+at. The distinction from the task spine's widths is real rather than convenient:
+a spine width is `70%`, the datum as a share and readable as one, while a pixel
+length is the datum times a plot width. Verified end to end — the rendered text
+of the exposure chart contains no number outside `CohortView.figures`.
+
+Every rule claimed here was mutation-tested: smuggling a `2 * 2` into
+`charts.py`, painting the ramp `#CC0000`, removing the axis clamp and restoring
+the pixel-length classification each produce failures.
+
 *Depends on:* W10.
 
 ### W12 — Portfolio page: KPI row + exposure ranking
