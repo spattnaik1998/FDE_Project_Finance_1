@@ -815,6 +815,18 @@ def executed_app():
 
     app = AppTest.from_file(str(UI_MODULE), default_timeout=180)
     app.run()
+
+    # W12 made "Portfolio" the default view, because it answers the plural
+    # question the customer actually asked. Every test in this module is about
+    # the ROLE REPORT, so the fixture now drives the selector to it rather than
+    # asserting against whichever page happens to load first.
+    #
+    # Six tests here failed the moment the default changed, which is the right
+    # behaviour: they are statements about one page and they stopped being true
+    # of the page they were served.
+    selectors = app.get("radio")
+    assert selectors, "no view selector; the app no longer offers two pages"
+    app = selectors[0].set_value("Role report").run()
     return app
 
 

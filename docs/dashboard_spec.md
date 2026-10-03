@@ -276,6 +276,28 @@ The hero figure ("0 of 231 tasks judged outright replaceable"), the tile row fro
 *Acceptance:* the lag appears exactly once on the page, asserted by a test that
 counts its occurrences. No tile shows an average across roles.
 
+**Status: complete.** `blocks.portfolio_blocks`, a `chart` block kind rendered by
+`document._chart`, chart CSS, and a two-entry view selector with Portfolio as the
+default. 21 tests in `tests/test_portfolio.py`.
+
+The lag criterion earned itself immediately: it failed on the first run because
+`10.1` appeared twice, once in the span and again in a prose sentence restating
+it. The page lost the sentence rather than the test losing the criterion — the
+span already prints all three numbers with their labels, so the prose was the same
+redundancy already cut from the role report's section 2.
+
+Both criteria were mutation-tested: adding a per-role lag column to the ranking
+table, and adding an "Average exposure" tile, each produce the failure the test
+claims to produce.
+
+Two consequences of making Portfolio the default, both of which surfaced as red
+rather than as a surprise later. Six role-report tests failed because they were
+asserting against whichever page loaded first; their fixture now drives the
+selector to "Role report". And `verify_stack --layer ui` failed for the same
+reason, so it now verifies **both** pages — a chart on the portfolio, eight
+sections and two tables on the report — rather than relaxing its expected counts
+until the served page passed.
+
 *Depends on:* W10, W11.
 
 ### W13 — Diffusion curve and rank agreement

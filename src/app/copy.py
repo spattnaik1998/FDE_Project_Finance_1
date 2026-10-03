@@ -530,3 +530,110 @@ def plain_caveat(caveat: str) -> str:
         text = text.replace(token, phrase)
     return text
 
+
+# ---------------------------------------------------------------------------
+# The portfolio page
+# ---------------------------------------------------------------------------
+#
+# The customer asked "which of our cost LINES are exposed" -- plural. Everything
+# before this answered it one role at a time. This page is the plural answer, and
+# its headings are written as the questions a research director actually has when
+# looking across a whole function rather than at one job.
+
+PORTFOLIO_EYEBROW = "Task exposure across the finance function"
+PORTFOLIO_TITLE = "Which roles are exposed, and by how much"
+PORTFOLIO_QUESTION = (
+    "Which of our cost lines are exposed to AI substitution, and on what "
+    "timetable?"
+)
+
+PORTFOLIO_HEADINGS = {
+    "bottom_line": "The short answer",
+    "ranking": "Which roles, in order",
+    "timetable": "When this starts to matter",
+    "depth": "How much of this we have examined in depth",
+    "limits": "Where this stops being reliable",
+}
+
+
+def portfolio_bottom_line(view) -> str:
+    return (
+        f"Across **{view.roles_assessed} finance roles** and "
+        f"**{view.tasks_assessed} published tasks**, exposure to current AI "
+        f"tools ranges from **{view.exposure_low} to {view.exposure_high}** on a "
+        f"0–1 scale. {view.most_exposed_title} sits at the top and "
+        f"{view.least_exposed_title} at the bottom.")
+
+
+RANKING_INTRO = (
+    "Each bar is the share of that role's published tasks that current AI tools "
+    "could perform, after discounting the work that depends on judgement nobody "
+    "can write down. Darker means more exposed."
+)
+
+
+def ranking_depth_note(view) -> str:
+    """Says which rows can be opened, before anyone clicks one.
+
+    Nine of the twelve roles exist in the warehouse as a single scored index: no
+    task-by-task reasoning, no caveats, no source bindings. Hatched bars mark
+    them, and this sentence says why rather than leaving a reader to discover it
+    by clicking.
+    """
+    return (
+        f"**{view.drillable_roles} of {view.roles_assessed} roles have been "
+        f"examined task by task.** The rest are scored but not yet broken down, "
+        f"and their bars are hatched. A hatched row has a number you can rely "
+        f"on and no detail behind it yet.")
+
+
+def portfolio_timetable(view) -> str:
+    """Kept, unused on the portfolio page, and that is deliberate.
+
+    The portfolio page shows the interval as a span and nothing else: the
+    acceptance criterion is that the lag appears exactly once, and a sentence
+    restating the figure beside it broke that the moment it was written. This
+    stays for a surface that shows the timetable WITHOUT the span -- a summary
+    email, a slide -- where prose is the only form available.
+    """
+    return (
+        f"Most likely **around {view.lag_p50} years**, and realistically "
+        f"anywhere between **{view.lag_p10} and {view.lag_p90}**.")
+
+
+TIMETABLE_IS_SHARED = (
+    "This is one timetable for the whole finance function, not one per role. It "
+    "is estimated from how fast finance firms are actually adopting these tools, "
+    "which is measured at sector level — so it does not vary between a tax "
+    "preparer and an investment analyst, and we do not pretend it does."
+)
+
+
+def portfolio_substitution(view) -> str:
+    """The substitution finding, with its denominator and scope attached.
+
+    Written this way because the unscoped version was wrong: counting every
+    substitute judgment ever persisted against a 231-task denominator mixed three
+    populations. The sentence now carries what it actually covers.
+    """
+    return (
+        f"Of the **{view.substitutable_of} tasks examined task by task**, across "
+        f"**{view.substitutable_roles} of {view.roles_assessed} roles**, "
+        f"**{view.substitutable_count}** were judged work AI would take over "
+        f"outright. The rest are work it would assist with, or work we could not "
+        f"call either way.")
+
+
+PORTFOLIO_LIMITS = (
+    "Roles are ranked by the share of their tasks that are exposed, not by what "
+    "they cost you. We do not hold your headcount or salary data, and weighting "
+    "the ranking by a guess at either would be the easiest way to produce a "
+    "confident wrong answer. A role near the top of this list is not necessarily "
+    "the one worth acting on first — that depends on how many people do it."
+)
+
+NO_AVERAGE_NOTE = (
+    "There is no average exposure figure on this page on purpose. An unweighted "
+    "mean across twelve occupations of different size describes nobody."
+)
+

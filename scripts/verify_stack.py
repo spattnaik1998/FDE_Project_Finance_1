@@ -409,17 +409,36 @@ def verify_ui(report: Report) -> None:
         # still reported PASS -- a green line measuring nothing, which is the
         # exact failure mode this script is written to avoid. It now fails if the
         # document is absent or carries no sections.
-        markup = " ".join(e.proto.body for e in app.get("html"))
+        # Both pages, because W12 made "Portfolio" the default and this check
+        # measured whichever one it happened to be served. It went red the moment
+        # the default changed, which is the behaviour this script exists for --
+        # and the fix is to verify both rather than to relax the expected counts
+        # until the served page passes.
+        portfolio = " ".join(e.proto.body for e in app.get("html"))
+        if not portfolio:
+            return FAIL, "the portfolio page did not render"
+        charts = portfolio.count("<svg")
+        if charts < 1:
+            return FAIL, f"portfolio rendered no chart ({charts} svg)"
+
+        selectors = app.get("radio")
+        if not selectors:
+            return FAIL, "no view selector; the app no longer offers two pages"
+        report_app = selectors[0].set_value("Role report").run()
+        if report_app.exception:
+            return FAIL, "; ".join(
+                str(e.value) for e in report_app.exception)[:140]
+
+        markup = " ".join(e.proto.body for e in report_app.get("html"))
         if not markup:
             return FAIL, "the report document did not render"
         sections = markup.count('<h2 class="sec">')
         tables = markup.count("<table>")
         if sections < 8 or tables < 2:
-            return FAIL, (f"document is incomplete: {sections} sections, "
+            return FAIL, (f"report is incomplete: {sections} sections, "
                           f"{tables} tables")
-        return (f"{sections} sections, {tables} tables, "
-                f'{markup.count(chr(34) + "fig" + chr(34))} figures, ' 
-                f"{len(markup):,} chars, 0 errors")
+        return (f"portfolio {charts} chart(s) · report {sections} sections, "
+                f"{tables} tables, 0 errors")
 
     @check(report, "ui", "bound to loopback only, if running")
     def _():

@@ -26,7 +26,7 @@ from app.view_model import ReportView
 KINDS = ("title", "caption", "heading", "markdown", "callout", "metrics",
          "table", "divider", "expander", "download", "request_form",
          "style", "figure", "span", "standing", "masthead", "panel",
-         "cards")
+         "cards", "chart")
 
 
 @dataclass(frozen=True)
@@ -149,6 +149,88 @@ def refusal_blocks(refusal) -> list[Block]:
     blocks.append(_b("caption", f"Reference: {refusal.code}"))
     blocks.append(_b("divider"))
     return blocks
+
+
+def _chart(form: str, geom, *, label: str, names: tuple = (),
+           table: dict | None = None) -> Block:
+    """A chart as data: the form, its geometry, and its table view.
+
+    The payload carries a :class:`~app.geometry.ChartGeometry`, not rendered
+    markup, so this module stays a description of what to show. The document
+    composer calls the primitive.
+
+    Every chart ships a table view. It is the accessibility floor, and it is the
+    honest answer to a reader who wants the values rather than the shape.
+    """
+    return _b("chart", {"form": form, "geom": geom, "label": label,
+                        "names": tuple(names), "table": table})
+
+
+def portfolio_blocks(view) -> list[Block]:
+    """The plural answer: every scored role, ranked.
+
+    Deliberately not a KPI grid. The tiles carry counts and identities, and the
+    one quantity a reader could misuse -- an average exposure across twelve
+    occupations of different size -- is absent and said to be absent.
+    """
+    cols = ("Role", "Exposure", "Tasks", "Examined in depth")
+    rows = tuple((r.title, r.exposure_index, r.tasks_scored,
+                  "yes" if r.has_full_run else "not yet") for r in view.rows)
+
+    blocks = [
+        _b("masthead", {
+            "eyebrow": copy.PORTFOLIO_EYEBROW,
+            "title": copy.PORTFOLIO_TITLE,
+            "question": copy.PORTFOLIO_QUESTION,
+            "meta": f"{view.roles_assessed} roles · "
+                    f"{view.tasks_assessed} tasks · "
+                    f"cohort {view.cohort_name}",
+        }),
+        _b("panel", [_b("markdown", copy.portfolio_bottom_line(view)),
+                     _b("markdown", copy.portfolio_substitution(view))],
+           label=copy.PORTFOLIO_HEADINGS["bottom_line"]),
+        _b("metrics", [
+            {"label": "Roles assessed", "value": view.roles_assessed},
+            {"label": "Tasks assessed", "value": view.tasks_assessed},
+            {"label": "Examined in depth", "value": view.drillable_roles},
+            {"label": "Most exposed", "value": view.most_exposed_title},
+        ]),
+        _b("divider"),
+
+        _b("heading", copy.PORTFOLIO_HEADINGS["ranking"]),
+        _b("markdown", copy.RANKING_INTRO),
+        _chart("bars", view.ranking_geometry,
+               label=f"Exposure by role, {view.roles_assessed} finance "
+                     f"occupations ranked",
+               table={"columns": cols, "rows": rows}),
+        _b("callout", copy.ranking_depth_note(view), tone="info"),
+        _b("divider"),
+
+        # The timetable appears ONCE, as a page-level figure. It is identical for
+        # every role because it is estimated from sector-level adoption, so a
+        # per-role column would invent variation that does not exist.
+        _b("heading", copy.PORTFOLIO_HEADINGS["timetable"]),
+        _span("Years before the cost line moves", view.lag_p10, view.lag_p50,
+              view.lag_p90,
+              note="Earliest · most likely · latest — one range for the "
+                   "whole function"),
+        # No prose restating the interval. The span above already prints all
+        # three numbers with their labels, and the spec's own acceptance
+        # criterion -- that the lag appears exactly once -- caught the duplicate
+        # the moment it was written. A sentence that repeats the figure beside it
+        # is the redundancy already cut from the role report's section 2.
+        _b("callout", copy.TIMETABLE_IS_SHARED, tone="info"),
+        _b("divider"),
+
+        _b("heading", copy.PORTFOLIO_HEADINGS["limits"]),
+        _b("markdown", copy.PORTFOLIO_LIMITS),
+        _b("caption", copy.NO_AVERAGE_NOTE),
+        _b("caption",
+           f"Scored under {view.classifier}, rubric {view.rubric_version}, "
+           f"cohort {view.cohort_name}. One classifier throughout: a ranking "
+           f"drawn across two would order roles by which model scored them."),
+    ]
+    return _numbered(blocks)
 
 
 def header_blocks(view: ReportView) -> list[Block]:
@@ -501,6 +583,33 @@ def displayed_strings(blocks: list[Block]) -> list[str]:
                     # of the one this check exists to close.
                     out.extend(str(item) for item in value
                                if isinstance(item, (str, int, float)))
+        # A chart payload holds a ChartGeometry, which falls through every
+        # branch above and would contribute nothing -- the same blind spot that
+        # once hid the figure and span blocks, and then the spine's widths. A
+        # traceability check that cannot see a chart's values is worse than none.
+        if isinstance(payload, dict) and "geom" in payload:
+            out.extend(_chart_strings(payload))
         for value in block.meta.values():
             out.append(str(value))
     return out
+
+
+def _chart_strings(payload) -> list[str]:
+    """Every string a chart puts on the page: labels, printed values, table."""
+    geom = payload["geom"]
+    out = [payload.get("label", ""), *payload.get("names", ())]
+    out.extend(sorted(geom.figures))
+    for mark in geom.marks:
+        for key in ("label", "text", "name", "end_text", "left_text",
+                    "right_text"):
+            if isinstance(mark.get(key), str):
+                out.append(mark[key])
+        for dot in mark.get("dots", ()):  
+            out.extend(str(dot[k]) for k in ("label", "text") if k in dot)
+    out.extend(tick["value"] for tick in geom.axis if "value" in tick)
+    table = payload.get("table")
+    if table:
+        out.extend(str(c) for c in table.get("columns", ()))
+        for row in table.get("rows", ()):
+            out.extend(str(cell) for cell in row)
+    return [value for value in out if value]

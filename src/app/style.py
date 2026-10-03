@@ -399,6 +399,64 @@ button[kind="secondary"], [data-testid="stDownloadButton"] button {
   font-family: 'Libre Franklin', system-ui, sans-serif;
 }
 
+/* ---- charts -------------------------------------------------------------- */
+/* Marks carry the series colour; text never does. Values, labels and legends
+   stay in ink tokens, and a coloured mark beside them carries identity. A light
+   series hue is illegible as text on white. */
+.chart-figure { margin: 0 0 1.8rem; }
+.chart { width: 100%; height: auto; display: block; overflow: visible; }
+
+.chart .c-label {
+  font-family: 'Libre Franklin', system-ui, sans-serif;
+  font-size: 12px; fill: var(--ink-body);
+}
+.chart .c-value, .chart .c-end {
+  font-family: 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums;
+  font-size: 12px; fill: var(--ink); font-weight: 500;
+}
+.chart .c-tick {
+  font-family: 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums;
+  font-size: 10px; fill: var(--ink-faint);
+}
+/* Recessive, hairline, solid. Never dashed. */
+.chart .c-grid { stroke: var(--rule); }
+.chart .c-join { stroke: var(--rule-firm); }
+/* The surface ring, so a dot stays legible where it crosses a line. It is part
+   of the hover target, not only spacing. */
+.chart .c-dot { stroke: var(--paper); }
+.chart .c-bar, .chart .c-dot { transition: opacity .12s ease; }
+.chart-figure:hover .c-bar { opacity: .72; }
+.chart-figure .c-bar:hover, .chart-figure .c-dot:hover { opacity: 1; }
+
+.c-legend {
+  display: flex; flex-wrap: wrap; gap: 1.2rem; margin: .5rem 0 0;
+  font-family: 'Libre Franklin', system-ui, sans-serif;
+  font-size: .76rem; color: var(--ink-soft);
+}
+.c-key { display: inline-flex; align-items: center; gap: .4rem; }
+.c-key > i { width: 10px; height: 10px; border-radius: 1px; display: inline-block; }
+
+.c-axis-note {
+  font-family: 'Libre Franklin', system-ui, sans-serif;
+  font-size: .73rem; line-height: 1.5; color: var(--ink-faint);
+  margin: .5rem 0 0; max-width: 56ch;
+}
+details.c-table { border-top: 1px solid var(--rule); margin-top: .7rem; padding-top: .5rem; }
+details.c-table summary {
+  font-family: 'Libre Franklin', system-ui, sans-serif;
+  font-size: .76rem; color: var(--ink-soft); cursor: pointer;
+  list-style: none; display: flex; gap: .5rem; align-items: center;
+}
+details.c-table summary::-webkit-details-marker { display: none; }
+details.c-table summary::before { content: "+"; font-family: 'IBM Plex Mono', monospace; color: var(--red); }
+details.c-table[open] summary::before { content: "3"; }
+details.c-table summary:hover { color: var(--navy); }
+
+/* Forced colors: the hatch is what survives, so keep marks outlined. */
+@media (forced-colors: active) {
+  .chart .c-bar, .chart .c-dot { forced-color-adjust: none; stroke: CanvasText; }
+}
+
 /* ---- quality floor --------------------------------------------------- */
 *:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }

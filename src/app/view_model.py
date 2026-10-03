@@ -155,6 +155,12 @@ class CohortView:
     drillable_roles: str
     figures: frozenset[str] = field(default_factory=frozenset)
 
+    # Pre-computed chart geometry. Computed by the gateway through
+    # app.geometry, because the presentation tier is forbidden arithmetic and a
+    # layer that could compute could place a mark no traced value implies.
+    # Typed loosely to keep the view model free of a presentation import.
+    ranking_geometry: object = None
+
     @property
     def rows_with_full_run(self) -> tuple[CohortRowView, ...]:
         return tuple(r for r in self.rows if r.has_full_run)

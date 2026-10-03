@@ -250,11 +250,41 @@ def _expander(payload, meta) -> str:
             f'<div class="disclose-body">{inner}</div></details>')
 
 
+def _chart(payload, meta) -> str:
+    """Dispatch to a chart primitive, then its table view.
+
+    The block carries geometry; this picks the primitive and nothing else. No
+    arithmetic here or in ``app.charts`` --- every coordinate arrived formatted
+    from ``app.geometry``, which is the tier allowed to compute.
+    """
+    from app import charts
+
+    form, geom = payload["form"], payload["geom"]
+    label, names = payload["label"], payload.get("names", ())
+
+    if form == "bars":
+        body = charts.bar_rows(geom, label=label)
+    elif form == "lines":
+        body = charts.line_series(geom, label=label, names=names)
+    elif form == "dumbbell":
+        body = charts.dumbbell_rows(geom, label=label, names=names)
+    else:
+        raise ValueError(f"no chart primitive for form {form!r}")
+
+    note = charts.axis_note(payload["note"]) if payload.get("note") else ""
+    table = payload.get("table")
+    view = (charts.table_view(tuple(table["columns"]), tuple(table["rows"]),
+                              label="View the numbers as a table")
+            if table else "")
+    return f'<figure class="chart-figure">{body}{note}{view}</figure>'
+
+
 RENDERERS = {
     "title": _title, "masthead": _masthead, "heading": _heading,
     "caption": _caption, "markdown": _markdown, "callout": _callout,
     "divider": _divider, "panel": _panel, "standing": _standing,
-    "figure": _figure, "span": _span, "cards": _cards, "metrics": _metrics, "table": _table,
+    "figure": _figure, "span": _span, "cards": _cards,
+    "chart": _chart, "metrics": _metrics, "table": _table,
     "expander": _expander,
 }
 

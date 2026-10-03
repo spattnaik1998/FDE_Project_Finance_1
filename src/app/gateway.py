@@ -402,6 +402,15 @@ def load_cohort(*, classifier: str | None = None,
             bar_percent=_bar(r[2]))
         for r in rows)
 
+    # Chart geometry, computed here because this tier may and the presentation
+    # tier may not. Only the printed values join `figures`; the pixel positions
+    # stay in the geometry's own `layout` set, because a datum multiplied by a
+    # plot width is not a number a reader can read.
+    from app import geometry as geom
+    ranking = geom.bars(
+        [(r.title, float(r.exposure_index), r.exposure_index,
+          not r.has_full_run) for r in cohort_rows], axis_max=1.0)
+
     view = CohortView(
         cohort_name=DEFAULT_COHORT, classifier=classifier,
         rubric_version=RUBRIC_VERSION, rows=cohort_rows,
@@ -416,7 +425,9 @@ def load_cohort(*, classifier: str | None = None,
         lag_p90=_fmt_lag(lag[2]),
         drillable_roles=str(len(drillable & {r[0] for r in rows})),
         figures=_cohort_figures(cohort_rows, indices, tasks_assessed,
-                                (sub_count, sub_of, sub_roles), lag))
+                                (sub_count, sub_of, sub_roles), lag)
+                | ranking.figures,
+        ranking_geometry=ranking)
 
     LOG.info("cohort=%s classifier=%s rows=%s drillable=%s tasks=%s",
              DEFAULT_COHORT, classifier, len(cohort_rows),

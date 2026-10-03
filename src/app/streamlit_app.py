@@ -36,8 +36,8 @@ from app import blocks as blocks_module
 from app import document
 from app.contract import RefusalReason, RunCost, RunRequest
 from app.style import STYLESHEET
-from app.gateway import (NoRunAvailable, available_runs, in_scope_occupations,
-                         load_view, submit)
+from app.gateway import (NoCohortAvailable, NoRunAvailable, available_runs,
+                         in_scope_occupations, load_cohort, load_view, submit)
 from app.view_model import ReportView
 
 PAGE_TITLE = "Task Exposure & Adoption Lag"
@@ -182,10 +182,22 @@ def _run_pending_request() -> str | None:
     return None
 
 
+PAGES = ("Portfolio", "Role report")
+
+
 def main() -> None:
     st.set_page_config(page_title=PAGE_TITLE, layout="wide",
                        initial_sidebar_state="collapsed")
     st.markdown(STYLESHEET, unsafe_allow_html=True)
+
+    # Two entries rather than a grid stacked on a document. The report is a
+    # document and the portfolio is a different reading mode; keeping them apart
+    # lets each page stay coherent.
+    page = st.sidebar.radio("View", PAGES, index=0)
+
+    if page == "Portfolio":
+        _render_portfolio()
+        return
 
     fresh_run_id = _run_pending_request()
 
@@ -207,6 +219,25 @@ def main() -> None:
     # this is the finding. "Ask about another role" is the right next move once
     # they have read one, so it sits where that move belongs.
     _render_request_form()
+
+
+def _render_portfolio() -> None:
+    """The plural answer: every scored role, ranked.
+
+    Degrades to a stated reason rather than an empty page. A portfolio view
+    missing rows still looks like a portfolio view, which is why the gateway
+    raises instead of returning a short list.
+    """
+    try:
+        cohort = load_cohort()
+    except NoCohortAvailable as exc:
+        st.info(str(exc))
+        return
+    except Exception as exc:                     # noqa: BLE001 - surfaced in UI
+        st.error(f"Could not load the cohort: {exc}")
+        return
+
+    _emit(blocks_module.portfolio_blocks(cohort))
 
 
 def _render_request_form() -> None:
