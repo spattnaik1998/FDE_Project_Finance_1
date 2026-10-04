@@ -77,6 +77,49 @@ STYLESHEET = """
   --review:    #8A6A11;
 
   --measure: 68ch;        /* one comfortable reading measure, used everywhere */
+
+  /* ---- chart tokens ----------------------------------------------------
+     Validated with the data-viz validator, not chosen by eye. The structural
+     navy above FAILED as a series colour (OKLCH L 0.255, outside the 0.43-0.77
+     band; chroma 0.046, reads gray), so it is the ramp's darkest step and the
+     series hues are lifted versions that pass all six checks.
+
+     The brand red is absent on purpose. A bar in the accent reads as an alarm,
+     which tells a reader something the number does not say. */
+  --ramp-0:    #8FB9D1;
+  --ramp-1:    #669BBB;
+  --ramp-2:    #427AA0;
+  --ramp-3:    #215980;
+  --ramp-4:    #0C2537;
+  --series-0:  #2E7DA8;
+  --series-1:  #A87A1E;
+  --hatch-bg:  #F1F3F6;
+  --hatch-ink: #8E8B88;
+}
+
+/* Dark steps, validated against the DARK surface rather than flipped from the
+   light ones -- the light pair fails the dark band (L 0.48-0.67) and the chroma
+   floor, because blues lose chroma at mid lightness in OKLCH.
+
+   Declared under both scopes: the media query covers the OS setting, the
+   data-theme scope covers a viewer's own toggle, and the :not() guard lets a
+   light stamp beat OS-dark. The page itself is pinned light by
+   .streamlit/config.toml -- an institutional paper, by deliberate choice -- so
+   these exist so the charts do not break if the surface ever changes, not
+   because a toggle ships today. */
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    --series-0:  #0E8CD6;
+    --series-1:  #BC8C1C;
+    --hatch-bg:  #1F2328;
+    --hatch-ink: #6E7681;
+  }
+}
+:root[data-theme="dark"] {
+  --series-0:  #0E8CD6;
+  --series-1:  #BC8C1C;
+  --hatch-bg:  #1F2328;
+  --hatch-ink: #6E7681;
 }
 
 /* ---- host chrome: hidden, because this is a document ------------------- */
@@ -418,6 +461,43 @@ button[kind="secondary"], [data-testid="stDownloadButton"] button {
   font-family: 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums;
   font-size: 10px; fill: var(--ink-faint);
 }
+/* Marks wear the series colour by class; nothing is inlined in the markup. One
+   token, one place to override, and the no-red rule is checkable here. */
+.chart .c-ramp-0 { fill: var(--ramp-0); }
+.chart .c-ramp-1 { fill: var(--ramp-1); }
+.chart .c-ramp-2 { fill: var(--ramp-2); }
+.chart .c-ramp-3 { fill: var(--ramp-3); }
+.chart .c-ramp-4 { fill: var(--ramp-4); }
+.chart .c-muted  { fill: url(#hatch); }
+.chart circle.c-s0 { fill: var(--series-0); }
+.chart circle.c-s1 { fill: var(--series-1); }
+.chart polyline.c-s0 { stroke: var(--series-0); }
+.chart polyline.c-s1 { stroke: var(--series-1); }
+.c-s0-bg { background: var(--series-0); }
+.c-s1-bg { background: var(--series-1); }
+.chart .c-hatch-bg { fill: var(--hatch-bg); }
+.chart .c-hatch-line { stroke: var(--hatch-ink); }
+/* An end label sits beside its own line, so it may not wear the series hue:
+   a light categorical colour is illegible as text. Ink, like every other
+   label on the page. */
+.chart .c-s0-ink, .chart .c-s1-ink { fill: var(--ink); }
+
+/* ---- the crosshair, in CSS alone -------------------------------------- */
+/* st.html does not execute JavaScript, so the usual mousemove crosshair is
+   unavailable. One invisible hit band per period reveals a sibling rule and
+   carries a readout naming every series at that period -- which is the thing a
+   per-mark tooltip cannot do, since hovering one dot tells you one value and the
+   question at a point on a trend is what BOTH lines were doing.
+
+   Keyboard and assistive-technology readers get no hover layer at all. That is
+   why every chart ships a table view rather than treating it as an extra. */
+.chart .c-hit { fill: transparent; }
+.chart .c-cross {
+  stroke: var(--ink-faint); stroke-width: 1; opacity: 0;
+  pointer-events: none;
+}
+.chart .c-slot:hover .c-cross { opacity: 1; }
+
 /* Recessive, hairline, solid. Never dashed. */
 .chart .c-grid { stroke: var(--rule); }
 .chart .c-join { stroke: var(--rule-firm); }
@@ -453,9 +533,15 @@ details.c-table[open] summary::before { content: "3"; }
 details.c-table summary:hover { color: var(--navy); }
 
 /* Forced colors: the hatch is what survives, so keep marks outlined. */
+/* Forced colors strips author fills, so identity has to come from somewhere
+   else: the hatch stays as texture and every mark keeps an outline. The table
+   view behind each chart is the real fallback. */
 @media (forced-colors: active) {
   .chart .c-bar, .chart .c-dot { forced-color-adjust: none; stroke: CanvasText; }
+  .chart .c-muted { fill: Canvas; stroke-dasharray: 2 2; }
+  .chart .c-cross { stroke: CanvasText; }
 }
+
 
 /* ---- quality floor --------------------------------------------------- */
 *:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
@@ -480,6 +566,13 @@ details.c-table summary:hover { color: var(--navy); }
   .doc { font-size: 10.5pt; }
   h2.sec { break-after: avoid; }
   .cards, .table-wrap, .panel { break-inside: avoid; }
+  /* A printed page must not be missing its numbers, and a crosshair cannot
+     work on paper. Folded into this block rather than added as a second
+     @media print, which would be two places to keep in step. */
+  details.c-table { display: block; }
+  details.c-table > div { display: block !important; }
+  .chart .c-cross, .chart .c-hit { display: none; }
+  .chart-figure { break-inside: avoid; }
 }
 </style>
 """

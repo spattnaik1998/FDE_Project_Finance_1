@@ -353,6 +353,46 @@ the theme attribute, texture fill available for forced-colors and print.
 *Acceptance:* `AppTest` executes the page and finds the table view for each chart.
 Legend present for both two-series charts. Reduced motion respected.
 
+**Status: complete.** 25 tests in `tests/test_chart_interaction.py`.
+
+**The crosshair is CSS alone**, because `st.html` does not execute JavaScript —
+verified in Streamlit's own source rather than assumed. One invisible hit band
+per period reveals a sibling rule and carries a readout naming *every* series at
+that period, which is the thing a per-mark tooltip cannot do: hovering one dot
+gives one value, and the question a reader has at a point on a trend is what both
+lines were doing. 21 slots on the live page, no script, no inline handlers.
+
+**Colour moved out of the markup into CSS tokens.** Three reasons: dark steps
+need somewhere to override, a token defined once cannot drift across three
+primitives, and the no-brand-red rule becomes checkable in one place. A test
+asserts no mark carries an inline colour, and a second asserts every mark class
+has a rule behind it — a class with no rule renders an invisible bar, which is
+worse than a tint.
+
+**Dark steps are selected, not flipped.** The light pair fails the dark band
+(OKLCH L 0.48–0.67, chroma ≥ 0.1; blues lose chroma at mid lightness), so
+`#0E8CD6` / `#BC8C1C` were re-stepped and re-validated against the dark surface.
+Declared under both the media query (with the `:not([data-theme="light"])` guard)
+and the theme attribute. The page itself stays pinned light by
+`.streamlit/config.toml` — an institutional paper, by deliberate choice — so these
+exist so the charts do not break if the surface changes, not because a toggle
+ships today.
+
+Print folds into the one existing `@media print` block rather than adding a
+second: tables open so a printed page is not missing its numbers, and the hover
+layer is dropped because a crosshair cannot work on paper. Forced colors keeps
+identity through texture and outlines once author fills are stripped.
+
+Three defects during the build, all mine. A division landed in `charts.py` and
+the parse test caught it on the next run — the hit-band width moved to
+`ChartGeometry.hit_band`, because the rule that the presentation tier computes
+nothing does not admit exceptions. A slice deletion swallowed `dumbbell_rows`,
+`legend`, `axis_note` and `table_view`, restored from the previous commit with
+the colour change re-applied. And **a mutation run defeated my own dark-steps
+test**: it checked the validated values appeared *somewhere* in the stylesheet,
+so flipping one scope back to the light pair passed. It now checks inside each
+override block and rejects a light hue there.
+
 *Depends on:* W12, W13.
 
 ### W15 — Provenance extension

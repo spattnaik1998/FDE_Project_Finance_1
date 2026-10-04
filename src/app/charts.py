@@ -29,12 +29,26 @@ from __future__ import annotations
 
 from app.document import esc
 
-# The validated palette. Checked with the data-viz validator rather than chosen
-# by eye -- the project's structural navy FAILED as a series colour (OKLCH L
-# 0.255, outside the 0.43-0.77 band; chroma 0.046, reads gray), so it is ink here
-# and the series hues are lifted versions that pass.
+# The validated palette, kept here as the record of what was checked. The marks
+# themselves now wear CSS classes rather than these literals.
+#
+# Colour moved into the stylesheet in W14 for three reasons: dark-mode steps need
+# somewhere to override, a token defined once cannot drift between three
+# primitives, and the "no brand red in any chart" rule becomes checkable in one
+# place instead of three.
+#
+# Checked with the data-viz validator rather than chosen by eye -- the project's
+# structural navy FAILED as a series colour (OKLCH L 0.255, outside the
+# 0.43-0.77 band; chroma 0.046, reads gray), so it is ink and the series hues are
+# lifted versions that pass all six checks.
 RAMP = ("#8FB9D1", "#669BBB", "#427AA0", "#215980", "#0C2537")
 SERIES = ("#2E7DA8", "#A87A1E")
+
+# The dark-mode steps, validated against the dark surface rather than flipped
+# from the light ones. The page itself is pinned light by .streamlit/config.toml
+# -- an institutional paper, by deliberate choice -- so these exist so the charts
+# do not break if the surface ever changes, not because a toggle ships today.
+SERIES_DARK = ("#0E8CD6", "#BC8C1C")
 
 # Sizes that never vary, so no renderer has to decide.
 BAR_RADIUS = "4"
@@ -62,14 +76,15 @@ def bar_rows(geometry, *, label: str) -> str:
     parts = [_open(geometry.width, geometry.height, label, "chart-bars"),
              _hatch_pattern()]
     for mark in geometry.marks:
-        fill = ("url(#hatch)" if mark["muted"]
-                else RAMP[int(mark["step"])])
+        tone = ("c-muted" if mark["muted"]
+                else f'c-ramp-{esc(mark["step"])}')
         parts.append(
             f'<text class="c-label" x="0" y="{esc(mark["label_y"])}" '
             f'dominant-baseline="middle">{esc(mark["label"])}</text>'
-            f'<rect class="c-bar" x="{esc(mark["x"])}" y="{esc(mark["y"])}" '
+            f'<rect class="c-bar {tone}" x="{esc(mark["x"])}" '
+            f'y="{esc(mark["y"])}" '
             f'width="{esc(mark["length"])}" height="{esc(mark["thickness"])}" '
-            f'rx="{BAR_RADIUS}" fill="{fill}">'
+            f'rx="{BAR_RADIUS}">'
             f'<title>{esc(mark["label"])}: {esc(mark["text"])}</title></rect>'
             f'<text class="c-value" x="{esc(mark["value_x"])}" '
             f'y="{esc(mark["label_y"])}" dominant-baseline="middle">'
@@ -89,24 +104,64 @@ def line_series(geometry, *, label: str, names: tuple[str, ...]) -> str:
             f'<text class="c-tick" x="0" y="{esc(tick["y"])}" '
             f'dominant-baseline="middle">{esc(tick["value"])}</text>')
     for mark in geometry.marks:
-        colour = SERIES[int(mark["slot"])]
+        series = f'c-s{esc(mark["slot"])}'
         parts.append(
-            f'<polyline class="c-line" points="{esc(mark["points"])}" '
-            f'fill="none" stroke="{colour}" stroke-width="{LINE_WIDTH}" '
+            f'<polyline class="c-line {series}" '
+            f'points="{esc(mark["points"])}" fill="none" '
+            f'stroke-width="{LINE_WIDTH}" '
             f'stroke-linejoin="round" stroke-linecap="round"/>')
         for dot in mark["dots"]:
             parts.append(
-                f'<circle class="c-dot" cx="{esc(dot["x"])}" '
-                f'cy="{esc(dot["y"])}" r="4.5" fill="{colour}" '
+                f'<circle class="c-dot {series}" cx="{esc(dot["x"])}" '
+                f'cy="{esc(dot["y"])}" r="4.5" '
                 f'stroke-width="{RING_WIDTH}">'
                 f'<title>{esc(mark["name"])} · {esc(dot["label"])}: '
                 f'{esc(dot["text"])}</title></circle>')
         parts.append(
-            f'<text class="c-end" x="{esc(mark["end_x"])}" '
+            f'<text class="c-end {series}-ink" x="{esc(mark["end_x"])}" '
             f'y="{esc(mark["end_y"])}" dx="10" dominant-baseline="middle">'
             f'{esc(mark["end_text"])}</text>')
+    parts.append(_crosshair_slots(geometry))
     parts.append("</svg>")
     return "".join(parts) + legend(names)
+
+
+def _crosshair_slots(geometry) -> str:
+    """A crosshair and a per-period readout, in CSS alone.
+
+    ``st.html`` does not execute JavaScript, so the usual mousemove crosshair is
+    unavailable. This emits one invisible hit band per period with a sibling rule
+    and readout, revealed by ``:hover`` on the band. No script, and it works
+    under content policies that block one.
+
+    The readout names every series at that period, which is the thing a
+    per-mark tooltip cannot do: hovering one dot tells you one value, while the
+    question a reader has at a point on a trend is what BOTH lines were doing.
+
+    Keyboard and assistive-technology readers do not get a hover layer at all,
+    which is the reason every chart ships a table view rather than treating it as
+    an optional extra.
+    """
+    if not geometry.marks:
+        return ""
+    first = geometry.marks[0]
+    band = geometry.hit_band
+    slots = []
+    for index, dot in enumerate(first["dots"]):
+        readings = " · ".join(
+            f'{mark["name"]}: {mark["dots"][index]["text"]}'
+            for mark in geometry.marks
+            if index < len(mark["dots"]))
+        slots.append(
+            f'<g class="c-slot">'
+            f'<rect class="c-hit" x="{esc(dot["x"])}" y="0" '
+            f'width="{esc(band)}" height="{esc(geometry.height)}" '
+            f'transform="translate(-{esc(band)},0)"/>'
+            f'<line class="c-cross" x1="{esc(dot["x"])}" y1="0" '
+            f'x2="{esc(dot["x"])}" y2="{esc(geometry.height)}"/>'
+            f'<title>{esc(dot["label"])} — {esc(readings)}</title>'
+            f'</g>')
+    return "".join(slots)
 
 
 def dumbbell_rows(geometry, *, label: str, names: tuple[str, ...]) -> str:
@@ -124,15 +179,15 @@ def dumbbell_rows(geometry, *, label: str, names: tuple[str, ...]) -> str:
             f'<line class="c-join" x1="{esc(mark["from_x"])}" '
             f'y1="{esc(mark["y"])}" x2="{esc(mark["to_x"])}" '
             f'y2="{esc(mark["y"])}" stroke-width="{LINE_WIDTH}"/>'
-            f'<circle class="c-dot" cx="{esc(mark["left_x"])}" '
+            f'<circle class="c-dot c-s0" cx="{esc(mark["left_x"])}" '
             f'cy="{esc(mark["y"])}" r="{esc(mark["radius"])}" '
-            f'fill="{SERIES[0]}" stroke-width="{RING_WIDTH}">'
-            f'<title>{esc(names[0])} · {esc(mark["label"])}: '
+            f'stroke-width="{RING_WIDTH}">'
+            f'<title>{esc(names[0])} Â· {esc(mark["label"])}: '
             f'{esc(mark["left_text"])}</title></circle>'
-            f'<circle class="c-dot" cx="{esc(mark["right_x"])}" '
+            f'<circle class="c-dot c-s1" cx="{esc(mark["right_x"])}" '
             f'cy="{esc(mark["y"])}" r="{esc(mark["radius"])}" '
-            f'fill="{SERIES[1]}" stroke-width="{RING_WIDTH}">'
-            f'<title>{esc(names[1])} · {esc(mark["label"])}: '
+            f'stroke-width="{RING_WIDTH}">'
+            f'<title>{esc(names[1])} Â· {esc(mark["label"])}: '
             f'{esc(mark["right_text"])}</title></circle>')
     parts.append("</svg>")
     return "".join(parts) + legend(names)
@@ -149,8 +204,7 @@ def legend(names: tuple[str, ...]) -> str:
     if len(names) < 2:
         return ""
     items = "".join(
-        f'<span class="c-key"><i style="background:{SERIES[index]}"></i>'
-        f'{esc(name)}</span>'
+        f'<span class="c-key"><i class="c-s{index}-bg"></i>{esc(name)}</span>'
         for index, name in enumerate(names))
     return f'<div class="c-legend">{items}</div>'
 
@@ -189,6 +243,6 @@ def _hatch_pattern() -> str:
     """
     return ('<defs><pattern id="hatch" width="6" height="6" '
             'patternTransform="rotate(45)" patternUnits="userSpaceOnUse">'
-            '<rect width="6" height="6" fill="#F1F3F6"/>'
-            '<line x1="0" y1="0" x2="0" y2="6" stroke="#8E8B88" '
+            '<rect class="c-hatch-bg" width="6" height="6"/>'
+            '<line class="c-hatch-line" x1="0" y1="0" x2="0" y2="6" '
             'stroke-width="1.5"/></pattern></defs>')

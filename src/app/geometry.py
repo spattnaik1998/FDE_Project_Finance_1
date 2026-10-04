@@ -57,6 +57,12 @@ class ChartGeometry:
     marks: tuple[dict, ...]
     width: str
     height: str
+    # Half-gap between x positions, as a crosshair hit-band width. Lives here
+    # rather than in app.charts because it is arithmetic, and the rule that the
+    # presentation tier computes nothing stays absolute -- the first attempt put
+    # this division in charts.py and the parse test caught it immediately. It
+    # encodes no datum and joins no traced set: it is a hit target.
+    hit_band: str = "0"
     figures: frozenset[str] = field(default_factory=frozenset)
     layout: frozenset[str] = field(default_factory=frozenset)
     axis: tuple[dict, ...] = ()
@@ -181,7 +187,8 @@ def lines(series, *, axis_min: float, axis_max: float) -> ChartGeometry:
     layout.update(tick["y"] for tick in axis)
     return ChartGeometry(
         marks=tuple(marks), width=_n(PLOT_WIDTH), height=_n(LINE_HEIGHT),
-        figures=frozenset(figures), layout=frozenset(layout), axis=axis)
+        figures=frozenset(figures), layout=frozenset(layout), axis=axis,
+        hit_band=_n(track / max(1, count)))
 
 
 # ---------------------------------------------------------------------------

@@ -150,10 +150,14 @@ def test_the_nine_roles_without_a_full_run_render_marked():
     so the distinction survives greyscale, print and forced-colors.
     """
     cohort = _cohort()
+    from app.style import STYLESHEET
+
     markup = document.compose(portfolio_blocks(cohort))
     expected = sum(1 for r in cohort.rows if not r.has_full_run)
     assert expected == 9, "the fixture must mirror the warehouse's 3-of-12"
-    assert markup.count("url(#hatch)") == expected
+    # The class in the markup, and the rule behind it in the stylesheet.
+    assert markup.count("c-muted") == expected
+    assert "fill: url(#hatch)" in STYLESHEET
 
 
 def test_the_page_states_how_many_roles_were_examined_in_depth():
@@ -336,8 +340,8 @@ def test_the_rendered_page_contains_a_chart_per_section(executed_app):
 
 def test_the_rendered_chart_marks_the_rows_that_cannot_be_opened(executed_app):
     markup = " ".join(e.proto.body for e in executed_app.get("html"))
-    assert "url(#hatch)" in markup
-    assert markup.count("url(#hatch)") >= 1
+    assert 'id="hatch"' in markup, "the pattern must be defined"
+    assert markup.count("c-muted") >= 1, "no row is marked as unopenable"
 
 
 def test_the_view_selector_offers_both_pages(executed_app):

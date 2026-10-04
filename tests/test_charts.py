@@ -364,15 +364,22 @@ def test_an_unopenable_row_is_marked_with_texture_not_a_tint():
     Texture rather than a lighter colour, so the distinction survives greyscale,
     print and forced-colors. A tint would vanish in all three.
     """
+    from app.style import STYLESHEET
+
     svg = charts.bar_rows(geometry.bars(BARS), label="l")
     assert 'id="hatch"' in svg
-    assert svg.count("url(#hatch)") == sum(1 for row in BARS if row[3])
+    # W14 moved mark colour into CSS classes, so the markup carries the class and
+    # the stylesheet carries the fill. Both halves are asserted: a class with no
+    # rule behind it renders an invisible bar, which is worse than a tint.
+    assert svg.count("c-muted") == sum(1 for row in BARS if row[3])
+    assert ".c-muted" in STYLESHEET
+    assert "fill: url(#hatch)" in STYLESHEET
 
 
 def test_a_chart_with_no_muted_rows_still_renders():
     clean = tuple((label, value, text, False) for label, value, text, _ in BARS)
     svg = charts.bar_rows(geometry.bars(clean), label="l")
-    assert "url(#hatch)" not in svg
+    assert "c-muted" not in svg
 
 
 def test_every_chart_can_ship_a_table_view():
