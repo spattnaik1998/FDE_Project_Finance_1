@@ -348,3 +348,70 @@ def test_the_view_selector_offers_both_pages(executed_app):
     radios = executed_app.get("radio")
     assert radios, "no view selector rendered"
     assert list(radios[0].options) == ["Portfolio", "Role report"]
+
+
+# ===========================================================================
+# Reachability: a feature nobody can find has been removed, in effect
+# ===========================================================================
+
+def test_the_view_selector_is_on_the_page_not_in_a_collapsed_sidebar():
+    """The defect that made the app look as though features were deleted.
+
+    W12 put the selector in ``st.sidebar.radio`` while ``set_page_config``
+    collapses the sidebar by default. A visitor landed on the portfolio with no
+    visible way to reach the role report or the request form. The navigation
+    existed and was invisible, which is worse than absent.
+    """
+    source = UI_MODULE.read_text(encoding="utf-8")
+    import re
+
+    calls = re.findall(r"st\.sidebar\.radio\(", source)
+    assert not calls, "the view selector is back inside the collapsed sidebar"
+    assert re.search(r"page = st\.radio\(", source), (
+        "the selector must be a page-level control")
+
+
+def test_the_request_form_is_on_both_pages():
+    """The product has one control, and it belongs wherever the visitor is.
+
+    It used to render only under the role report, so on the default page it was
+    absent entirely --- which is what "I cannot see the chatbot" meant.
+    """
+    source = UI_MODULE.read_text(encoding="utf-8")
+    portfolio_branch = source[source.index('if page == "Portfolio"'):
+                               source.index("fresh_run_id or sidebar_run_id")]
+    assert "_render_request_form()" in portfolio_branch, (
+        "the portfolio page returns without rendering the request form")
+
+
+def test_a_request_submitted_from_the_portfolio_still_runs():
+    """``_run_pending_request`` has to come before the page branch.
+
+    It used to sit after it, so a request submitted on the portfolio page hit
+    the early return and never executed: no spinner, no run, no result.
+    """
+    source = UI_MODULE.read_text(encoding="utf-8")
+    body = source[source.index("def main() -> None:"):]
+    assert body.index("_run_pending_request()") < body.index(
+        'if page == "Portfolio"'), (
+        "submitted work must run before the page branch returns")
+
+
+def test_a_fresh_run_lands_on_the_report_that_shows_it():
+    """Submitting from the portfolio should not leave the result unseen."""
+    source = UI_MODULE.read_text(encoding="utf-8")
+    assert "default = 1 if fresh_run_id else 0" in source
+    assert "and not fresh_run_id" in source
+
+
+def test_the_default_page_renders_every_control_a_visitor_needs(executed_app):
+    """Executed, not inspected: the three things that were invisible."""
+    assert executed_app.get("radio"), "no view selector"
+    assert list(executed_app.get("radio")[0].options) == ["Portfolio",
+                                                           "Role report"]
+    assert executed_app.get("text_area"), "no question box"
+    assert executed_app.button, "no submit button"
+
+    markup = " ".join(e.proto.body for e in executed_app.get("html"))
+    assert markup.count("<svg") >= 3, "the charts did not render"
+

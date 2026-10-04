@@ -63,6 +63,13 @@ class ChartGeometry:
     # this division in charts.py and the parse test caught it immediately. It
     # encodes no datum and joins no traced set: it is a hit target.
     hit_band: str = "0"
+    # The plot's aspect ratio, for a CSS `aspect-ratio` that does not depend on
+    # the SVG's viewBox surviving sanitisation. st.html runs the markup through
+    # DOMPurify, which lowercases attribute names, and SVG's viewBox is
+    # case-sensitive -- so a chart can lose its intrinsic size and collapse to
+    # zero height while every test still passes, because AppTest does not
+    # sanitise. Computed here because this is the tier that may divide.
+    aspect: str = "3 / 1"
     figures: frozenset[str] = field(default_factory=frozenset)
     layout: frozenset[str] = field(default_factory=frozenset)
     axis: tuple[dict, ...] = ()
@@ -71,6 +78,11 @@ class ChartGeometry:
 def _n(value: float) -> str:
     """One decimal, trailing zero dropped. The only formatter in this module."""
     return f"{value:.1f}".rstrip("0").rstrip(".") or "0"
+
+
+def _aspect(width: float, height: float) -> str:
+    """A CSS aspect-ratio for the plot, so layout survives a lost viewBox."""
+    return f"{_n(width)} / {_n(max(1.0, height))}"
 
 
 def _share(value: float, maximum: float) -> float:
@@ -133,7 +145,8 @@ def bars(rows, *, axis_max: float = 1.0) -> ChartGeometry:
     height = len(rows) * (ROW_HEIGHT + ROW_GAP)
     return ChartGeometry(
         marks=tuple(marks), width=_n(PLOT_WIDTH), height=_n(height),
-        figures=frozenset(figures), layout=frozenset(layout))
+        figures=frozenset(figures), layout=frozenset(layout),
+        aspect=_aspect(PLOT_WIDTH, height))
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +201,8 @@ def lines(series, *, axis_min: float, axis_max: float) -> ChartGeometry:
     return ChartGeometry(
         marks=tuple(marks), width=_n(PLOT_WIDTH), height=_n(LINE_HEIGHT),
         figures=frozenset(figures), layout=frozenset(layout), axis=axis,
-        hit_band=_n(track / max(1, count)))
+        hit_band=_n(track / max(1, count)),
+        aspect=_aspect(PLOT_WIDTH, LINE_HEIGHT))
 
 
 # ---------------------------------------------------------------------------
@@ -230,4 +244,5 @@ def dumbbells(rows, *, axis_max: float = 100.0) -> ChartGeometry:
     layout.update(tick["x"] for tick in axis)
     return ChartGeometry(
         marks=tuple(marks), width=_n(PLOT_WIDTH), height=_n(height),
-        figures=frozenset(figures), layout=frozenset(layout), axis=axis)
+        figures=frozenset(figures), layout=frozenset(layout), axis=axis,
+        aspect=_aspect(PLOT_WIDTH, height))

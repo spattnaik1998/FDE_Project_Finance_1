@@ -447,7 +447,11 @@ button[kind="secondary"], [data-testid="stDownloadButton"] button {
    stay in ink tokens, and a coloured mark beside them carries identity. A light
    series hue is illegible as text on white. */
 .chart-figure { margin: 0 0 1.8rem; }
-.chart { width: 100%; height: auto; display: block; overflow: visible; }
+/* A floor, so a chart is never invisible even if both the viewBox and the
+   aspect-ratio are stripped. An empty 240px band is a visible fault someone
+   reports; a 0px band looks like the feature was removed. */
+.chart { width: 100%; height: auto; display: block; overflow: visible;
+         min-height: 180px; }
 
 .chart .c-label {
   font-family: 'Libre Franklin', system-ui, sans-serif;

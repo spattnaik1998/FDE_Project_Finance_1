@@ -57,11 +57,24 @@ RING_WIDTH = "2"
 HAIRLINE = "1"
 
 
-def _open(width: str, height: str, label: str, classes: str = "") -> str:
-    """An accessible SVG root. Sized by viewBox so it scales to its container."""
+def _open(width: str, height: str, label: str, classes: str = "",
+          aspect: str = "3 / 1") -> str:
+    """An accessible SVG root that cannot collapse to zero height.
+
+    ``viewBox`` alone was not enough. ``st.html`` sanitises with DOMPurify, which
+    lowercases attribute names, and SVG's ``viewBox`` is case-sensitive --- so a
+    chart can lose its intrinsic size, ``height: auto`` resolves to 0, and the
+    page shows nothing. ``AppTest`` does not sanitise, so the suite stays green
+    while the browser is blank, which is the worst shape a defect can take.
+
+    So the element carries a CSS ``aspect-ratio`` as well. ``width="100%"`` is a
+    percentage rather than a pixel count, so it does not defeat the scaling the
+    viewBox provides when it does survive.
+    """
     return (f'<svg class="chart {esc(classes)}" role="img" '
-            f'aria-label="{esc(label)}" '
+            f'aria-label="{esc(label)}" width="100%" '
             f'viewBox="0 0 {esc(width)} {esc(height)}" '
+            f'style="aspect-ratio: {esc(aspect)}" '
             f'preserveAspectRatio="xMinYMin meet">')
 
 
@@ -73,7 +86,8 @@ def bar_rows(geometry, *, label: str) -> str:
     forced-colors --- nine of twelve rows are one number each and that has to be
     visible rather than discovered by clicking.
     """
-    parts = [_open(geometry.width, geometry.height, label, "chart-bars"),
+    parts = [_open(geometry.width, geometry.height, label, "chart-bars",
+                   geometry.aspect),
              _hatch_pattern()]
     for mark in geometry.marks:
         tone = ("c-muted" if mark["muted"]
@@ -95,7 +109,8 @@ def bar_rows(geometry, *, label: str) -> str:
 
 def line_series(geometry, *, label: str, names: tuple[str, ...]) -> str:
     """Two trend lines over a shared x axis, with end labels and a hover layer."""
-    parts = [_open(geometry.width, geometry.height, label, "chart-lines")]
+    parts = [_open(geometry.width, geometry.height, label, "chart-lines",
+                   geometry.aspect)]
     for tick in geometry.axis:
         parts.append(
             f'<line class="c-grid" x1="0" y1="{esc(tick["y"])}" '
@@ -166,7 +181,8 @@ def _crosshair_slots(geometry) -> str:
 
 def dumbbell_rows(geometry, *, label: str, names: tuple[str, ...]) -> str:
     """Two positions per item, joined by a rule. The gap is the finding."""
-    parts = [_open(geometry.width, geometry.height, label, "chart-dumbbell")]
+    parts = [_open(geometry.width, geometry.height, label, "chart-dumbbell",
+                   geometry.aspect)]
     for tick in geometry.axis:
         parts.append(
             f'<line class="c-grid" x1="{esc(tick["x"])}" y1="0" '

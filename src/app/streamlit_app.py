@@ -191,16 +191,35 @@ def main() -> None:
                        initial_sidebar_state="collapsed")
     st.markdown(STYLESHEET, unsafe_allow_html=True)
 
-    # Two entries rather than a grid stacked on a document. The report is a
-    # document and the portfolio is a different reading mode; keeping them apart
-    # lets each page stay coherent.
-    page = st.sidebar.radio("View", PAGES, index=0)
-
-    if page == "Portfolio":
-        _render_portfolio()
-        return
-
+    # Submitted work runs FIRST, whichever page it was submitted from.
+    #
+    # This used to sit below the page branch, so a request submitted on the
+    # portfolio page returned before it could execute: the spinner never
+    # appeared and the run never happened.
     fresh_run_id = _run_pending_request()
+
+    # The selector is ON THE PAGE, not in the sidebar.
+    #
+    # W12 put it in `st.sidebar.radio` while set_page_config collapses the
+    # sidebar by default. So a visitor landed on the portfolio with no visible
+    # way to reach the role report or the request form. The navigation existed
+    # and was invisible, which is worse than absent -- it looked as though the
+    # features had been removed.
+    #
+    # Two entries rather than a grid stacked on a document: the report is a
+    # document and the portfolio is a different reading mode, and keeping them
+    # apart lets each page stay coherent.
+    default = 1 if fresh_run_id else 0      # a fresh run belongs on the report
+    page = st.radio("View", PAGES, index=default, horizontal=True,
+                    label_visibility="collapsed", key="view")
+
+    if page == "Portfolio" and not fresh_run_id:
+        _render_portfolio()
+        # The one control this product has belongs on whichever page the visitor
+        # is standing on. It used to render only under the role report, so on the
+        # default page it was absent entirely.
+        _render_request_form()
+        return
 
     try:
         view = load_view(fresh_run_id or sidebar_run_id())

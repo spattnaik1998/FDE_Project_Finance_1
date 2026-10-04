@@ -400,11 +400,59 @@ def test_the_axis_note_carries_the_qualifier_rather_than_a_footnote():
 
 
 def test_the_svg_scales_rather_than_fixing_pixel_width():
-    """A fixed-width chart breaks the page at phone width."""
+    """A fixed-width chart breaks the page at phone width.
+
+    The assertion bans a PIXEL width, not every width. It used to reject
+    ``width="\d`` outright, which caught ``width="100%"`` --- a percentage, and
+    the opposite of the problem. A percentage scales; a bare number does not.
+    """
     svg = charts.bar_rows(geometry.bars(BARS), label="l")
     assert "viewBox=" in svg
-    assert not re.search(r'<svg[^>]*\swidth="\d', svg), (
-        "a hardcoded width defeats the viewBox")
+    pixel_width = re.search(r'<svg[^>]*\swidth="\d+(?:\.\d+)?"', svg)
+    assert not pixel_width, (
+        f"a hardcoded pixel width defeats the viewBox: {pixel_width}")
+    assert re.search(r'<svg[^>]*\swidth="100%"', svg), (
+        "the element needs a percentage width so it fills its container")
+
+
+def test_the_svg_cannot_collapse_to_zero_height():
+    """The failure mode that shows a blank page while every test passes.
+
+    ``st.html`` sanitises with DOMPurify, which lowercases attribute names, and
+    SVG's ``viewBox`` is case-sensitive. If it does not survive, the element has
+    no intrinsic size, ``height: auto`` resolves to 0, and the chart is
+    invisible --- while ``AppTest``, which never sanitises, keeps reporting three
+    charts.
+
+    So sizing has three independent sources: the viewBox, a CSS aspect-ratio
+    computed in the tier allowed to compute, and a min-height floor. An empty
+    180px band is a visible fault someone reports; a 0px band looks like the
+    feature was deleted.
+    """
+    from app.style import STYLESHEET
+
+    result = geometry.bars(BARS)
+    svg = charts.bar_rows(result, label="l")
+
+    assert "viewBox=" in svg
+    assert "aspect-ratio:" in svg, "no fallback if the viewBox is stripped"
+    assert result.aspect.count("/") == 1, f"malformed ratio {result.aspect!r}"
+    assert "min-height" in STYLESHEET[STYLESHEET.index(".chart {"):][:200]
+
+
+def test_the_aspect_ratio_matches_the_plot():
+    """A wrong ratio distorts every mark, which is worse than no ratio."""
+    result = geometry.bars(BARS)
+    width, height = (float(part) for part in result.aspect.split("/"))
+    assert width == float(result.width)
+    assert height == float(result.height)
+
+
+def test_a_zero_height_plot_does_not_produce_a_divide_by_zero_ratio():
+    """An empty chart still needs a usable ratio rather than `720 / 0`."""
+    empty = geometry.bars(())
+    width, height = (float(part) for part in empty.aspect.split("/"))
+    assert height >= 1.0
 
 
 # ===========================================================================
