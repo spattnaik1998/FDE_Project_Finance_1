@@ -77,13 +77,21 @@ def test_the_naics_qualifier_is_on_the_chart_not_in_a_footnote(adoption):
 
 
 def test_the_rendered_chart_carries_the_axis_note(portfolio, adoption):
-    markup = document.compose(blocks_module.portfolio_blocks(portfolio))
-    assert 'class="c-axis-note"' in markup
-    position = markup.index("NAICS 52")
-    figure_open = markup.rindex('<figure class="chart-figure">', 0, position)
-    figure_close = markup.index("</figure>", position)
-    assert figure_open < position < figure_close, (
-        "the qualifier must sit inside the chart's own figure element")
+    """The qualifier travels inside the chart's own markup.
+
+    It used to be asserted against a <figure> wrapper in the composed document.
+    Charts now render into an iframe, so the note is part of the chart's markup
+    and must sit after its SVG rather than loose in the page.
+    """
+    from app import charts
+
+    chart = charts.figure(
+        next(b.payload for b in blocks_module.portfolio_blocks(portfolio)
+             if b.kind == "chart" and b.payload["form"] == "lines"))
+    assert 'class="c-axis-note"' in chart
+    assert "NAICS 52" in chart
+    assert chart.index("</svg>") < chart.index("NAICS 52"), (
+        "the note belongs after the plot it qualifies")
 
 
 # ===========================================================================
@@ -322,10 +330,16 @@ def test_no_figure_is_typed_into_the_new_copy():
 # ===========================================================================
 
 def test_each_new_chart_ships_a_legend_and_a_table(portfolio):
-    """Two series each, so identity never rests on colour alone."""
-    markup = document.compose(blocks_module.portfolio_blocks(portfolio))
-    assert markup.count('class="c-legend"') == 2
-    assert markup.count('class="c-table"') == 3, (
+    """Two series each, so identity never rests on colour alone.
+
+    The legends ride with the charts into the iframe; the table views stay in the
+    sanitised document, where they are plain HTML the page already styles.
+    """
+    from app import charts
+
+    page = blocks_module.portfolio_blocks(portfolio)
+    assert charts.page_charts(page).count('class="c-legend"') == 2
+    assert document.compose(page).count('class="c-table"') == 3, (
         "every chart on the page ships a table view")
 
 
@@ -342,7 +356,9 @@ def test_the_dumbbell_has_no_meter_and_the_bars_have_no_trackless_span(
     This is the same rule that keeps exposure and the lag on different grammar,
     applied to the new charts.
     """
-    markup = document.compose(blocks_module.portfolio_blocks(portfolio))
+    from app import charts
+
+    markup = charts.page_charts(blocks_module.portfolio_blocks(portfolio))
     dumbbell = markup[markup.index("chart-dumbbell"):]
     assert 'class="meter"' not in dumbbell
 

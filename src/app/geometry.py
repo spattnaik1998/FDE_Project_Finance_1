@@ -70,6 +70,11 @@ class ChartGeometry:
     # zero height while every test still passes, because AppTest does not
     # sanitise. Computed here because this is the tier that may divide.
     aspect: str = "3 / 1"
+    # Height for the iframe the SVG has to live in. An iframe is a fixed pixel
+    # box -- it cannot size to its content -- so this is the plot height scaled
+    # to the page's content width, plus room for the legend. Computed here
+    # because this is the tier that may divide.
+    frame_height: str = "260"
     figures: frozenset[str] = field(default_factory=frozenset)
     layout: frozenset[str] = field(default_factory=frozenset)
     axis: tuple[dict, ...] = ()
@@ -78,6 +83,19 @@ class ChartGeometry:
 def _n(value: float) -> str:
     """One decimal, trailing zero dropped. The only formatter in this module."""
     return f"{value:.1f}".rstrip("0").rstrip(".") or "0"
+
+
+# The document's content width: .block-container max-width less its padding. The
+# SVG scales to the iframe's width, so the iframe's height must follow the same
+# ratio or the chart is letterboxed or clipped.
+CONTENT_WIDTH = 976.0
+LEGEND_ALLOWANCE = 56.0
+
+
+def _frame(width: float, height: float) -> str:
+    """Pixel height for the iframe, so the scaled plot fits exactly."""
+    scaled = height * (CONTENT_WIDTH / width) if width else height
+    return str(int(scaled + LEGEND_ALLOWANCE) + 1)
 
 
 def _aspect(width: float, height: float) -> str:
@@ -146,7 +164,8 @@ def bars(rows, *, axis_max: float = 1.0) -> ChartGeometry:
     return ChartGeometry(
         marks=tuple(marks), width=_n(PLOT_WIDTH), height=_n(height),
         figures=frozenset(figures), layout=frozenset(layout),
-        aspect=_aspect(PLOT_WIDTH, height))
+        aspect=_aspect(PLOT_WIDTH, height),
+        frame_height=_frame(PLOT_WIDTH, height))
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +221,8 @@ def lines(series, *, axis_min: float, axis_max: float) -> ChartGeometry:
         marks=tuple(marks), width=_n(PLOT_WIDTH), height=_n(LINE_HEIGHT),
         figures=frozenset(figures), layout=frozenset(layout), axis=axis,
         hit_band=_n(track / max(1, count)),
-        aspect=_aspect(PLOT_WIDTH, LINE_HEIGHT))
+        aspect=_aspect(PLOT_WIDTH, LINE_HEIGHT),
+        frame_height=_frame(PLOT_WIDTH, LINE_HEIGHT))
 
 
 # ---------------------------------------------------------------------------
@@ -245,4 +265,5 @@ def dumbbells(rows, *, axis_max: float = 100.0) -> ChartGeometry:
     return ChartGeometry(
         marks=tuple(marks), width=_n(PLOT_WIDTH), height=_n(height),
         figures=frozenset(figures), layout=frozenset(layout), axis=axis,
-        aspect=_aspect(PLOT_WIDTH, height))
+        aspect=_aspect(PLOT_WIDTH, height),
+        frame_height=_frame(PLOT_WIDTH, height))

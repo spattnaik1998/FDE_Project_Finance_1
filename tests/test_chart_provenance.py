@@ -44,7 +44,9 @@ def page():
         pytest.skip(f"no portfolio data: {type(exc).__name__}: {exc}")
     blocks = blocks_module.portfolio_blocks(view)
     return {"view": view, "blocks": blocks,
-            "markup": document.compose(blocks),
+            # The page a reader receives: the chart markup that goes in the
+            # iframes, plus the sanitised document around them.
+            "markup": charts.page_charts(blocks) + document.compose(blocks),
             "geometries": [b.payload["geom"] for b in blocks
                            if b.kind == "chart"]}
 

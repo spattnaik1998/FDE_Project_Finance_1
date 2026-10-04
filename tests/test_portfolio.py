@@ -150,14 +150,17 @@ def test_the_nine_roles_without_a_full_run_render_marked():
     so the distinction survives greyscale, print and forced-colors.
     """
     cohort = _cohort()
+    from app import charts
     from app.style import STYLESHEET
 
-    markup = document.compose(portfolio_blocks(cohort))
+    markup = charts.page_charts(portfolio_blocks(cohort))
     expected = sum(1 for r in cohort.rows if not r.has_full_run)
     assert expected == 9, "the fixture must mirror the warehouse's 3-of-12"
-    # The class in the markup, and the rule behind it in the stylesheet.
+    # The class in the chart markup, and the rule behind it. The iframe inlines
+    # its own copy of the chart CSS, so both are asserted.
     assert markup.count("c-muted") == expected
     assert "fill: url(#hatch)" in STYLESHEET
+    assert "fill: url(#hatch)" in charts.FRAME_CSS
 
 
 def test_the_page_states_how_many_roles_were_examined_in_depth():
@@ -207,8 +210,11 @@ def test_the_figure_scan_catches_an_invented_chart_value(monkeypatch):
     """Proves the scan above is not decoration."""
     cohort = _cohort()
     poisoned = geometry.bars([("Invented role", 0.5, "73.2%", False)])
+    # _chart returns a PAIR: the chart for the iframe and its table for the
+    # document. Both are passed, because a figure smuggled into either one
+    # reaches the page.
     strings = displayed_strings(
-        [blocks_module._chart("bars", poisoned, label="l")])
+        list(blocks_module._chart("bars", poisoned, label="l")))
     assert "73.2%" in strings
     assert "73.2%" not in cohort.figures
 
@@ -252,9 +258,31 @@ def test_the_chart_block_carries_geometry_not_markup():
 
 def test_an_unknown_chart_form_is_refused():
     """A silently skipped chart is a finding the customer never saw."""
-    bad = blocks_module._chart("sunburst", geometry.bars(()), label="l")
+    from app import charts
+
+    bad, = blocks_module._chart("sunburst", geometry.bars(()), label="l")
     with pytest.raises(ValueError, match="no chart primitive"):
-        document.render_block(bad)
+        charts.figure(bad.payload)
+
+
+def test_the_document_composer_cannot_render_a_chart():
+    """One path, so a check cannot measure a string the browser never gets.
+
+    While RENDERERS still carried a "chart" entry, compose() kept emitting the
+    SVG inline even though segments() routed charts to an iframe -- and the
+    dashboard verification measured compose() and reported three charts no
+    browser would see.
+    """
+    assert "chart" not in document.RENDERERS
+    assert "chart" in document.WIDGET_KINDS
+    good, = blocks_module._chart("bars", geometry.bars(()), label="l")
+    assert document.render_block(good) == ""
+    # And the table half IS rendered by the composer, so the pair covers both.
+    chart, table = blocks_module._chart(
+        "bars", geometry.bars(()), label="l",
+        table={"columns": ("a",), "rows": (("1",),)})
+    assert document.render_block(chart) == ""
+    assert "c-table" in document.render_block(table)
 
 
 def test_the_page_builder_performs_no_arithmetic():
@@ -330,18 +358,22 @@ def test_the_rendered_page_contains_a_chart_per_section(executed_app):
     as a floor now, with every chart shipping its table view, so the next
     addition does not require editing a number here.
     """
-    markup = " ".join(e.proto.body for e in executed_app.get("html"))
-    charts = markup.count("<svg")
-    assert charts >= 3, f"expected the ranking, diffusion and agreement charts; got {charts}"
-    assert 'class="chart-figure"' in markup
-    assert markup.count('class="c-table"') == charts, (
-        "every chart ships a table view")
+    from conftest import chart_frames, page_markup
+
+    frames = chart_frames(executed_app)
+    charts = frames.count("<svg")
+    assert charts >= 3, (
+        f"expected the ranking, diffusion and agreement charts; got {charts}")
+    # Each chart still ships its table view, in the main document.
+    assert page_markup(executed_app).count('class="c-table"') == charts
 
 
 def test_the_rendered_chart_marks_the_rows_that_cannot_be_opened(executed_app):
-    markup = " ".join(e.proto.body for e in executed_app.get("html"))
-    assert 'id="hatch"' in markup, "the pattern must be defined"
-    assert markup.count("c-muted") >= 1, "no row is marked as unopenable"
+    from conftest import chart_frames
+
+    frames = chart_frames(executed_app)
+    assert 'id=' in frames and "hatch" in frames, "the pattern must be defined"
+    assert frames.count("c-muted") >= 1, "no row is marked as unopenable"
 
 
 def test_the_view_selector_offers_both_pages(executed_app):
@@ -412,6 +444,8 @@ def test_the_default_page_renders_every_control_a_visitor_needs(executed_app):
     assert executed_app.get("text_area"), "no question box"
     assert executed_app.button, "no submit button"
 
-    markup = " ".join(e.proto.body for e in executed_app.get("html"))
-    assert markup.count("<svg") >= 3, "the charts did not render"
+    from conftest import chart_frames
+
+    assert chart_frames(executed_app).count("<svg") >= 3, (
+        "the charts did not render")
 

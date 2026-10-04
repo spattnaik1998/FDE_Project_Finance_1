@@ -49,7 +49,14 @@ def portfolio():
 
 @pytest.fixture(scope="module")
 def markup(portfolio) -> str:
-    return document.compose(blocks_module.portfolio_blocks(portfolio))
+    """The chart markup plus the document, which is what the page adds up to.
+
+    Charts live in iframes (st.html strips SVG), so the composed document alone
+    no longer contains them. `charts.page_charts` is the one definition of a
+    chart's markup, used here and by the dispatcher.
+    """
+    page = blocks_module.portfolio_blocks(portfolio)
+    return charts.page_charts(page) + document.compose(page)
 
 
 def _lines():
@@ -328,12 +335,29 @@ def executed_app():
 
 
 def test_the_rendered_page_carries_the_interaction_layer(executed_app):
+    """The crosshair and the legend ride in the chart iframes.
+
+    This read ``app.get("html")`` and broke when the charts moved there, which
+    was the right failure: SVG cannot survive st.html's sanitiser, so looking for
+    it in the main document was looking in the wrong place.
+    """
+    from conftest import chart_frames, page_markup
+
     assert not executed_app.exception, [
         str(e.value) for e in executed_app.exception]
-    body = " ".join(e.proto.body for e in executed_app.get("html"))
-    assert 'class="c-slot"' in body, "the crosshair did not reach the page"
-    assert body.count('class="c-table"') == body.count("<svg")
-    assert body.count('class="c-legend"') == 2
+
+    frames = chart_frames(executed_app)
+    assert "c-slot" in frames, "the crosshair did not reach the chart iframes"
+    # Counted on the ELEMENT, not the class name: the inlined stylesheet also
+    # mentions .c-legend, so a bare substring count returned five.
+    assert frames.count('<div class=') >= 2
+    assert frames.count("c-key") >= 4, (
+        "both two-series charts need their legend swatches")
+
+    # The table views stay in the main document: plain HTML the sanitiser
+    # allows, and an opened <details> inside a fixed-height iframe would clip.
+    page = page_markup(executed_app)
+    assert page.count('class="c-table"') == 3
 
 
 def test_the_stylesheet_reaches_the_page_with_its_tokens(executed_app):

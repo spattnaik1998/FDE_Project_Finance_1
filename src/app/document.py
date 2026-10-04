@@ -250,33 +250,29 @@ def _expander(payload, meta) -> str:
             f'<div class="disclose-body">{inner}</div></details>')
 
 
-def _chart(payload, meta) -> str:
-    """Dispatch to a chart primitive, then its table view.
+# The chart renderer has been removed from this module deliberately.
+#
+# A chart is a widget (see WIDGET_KINDS): its SVG cannot survive st.html's
+# sanitiser, so the dispatcher renders it into a components iframe. While
+# RENDERERS still carried a "chart" entry, render_block found it first and
+# compose() kept emitting the SVG inline -- so segments() routed charts to the
+# iframe while compose() rendered them in place, and the dashboard verification
+# measured compose() and reported three charts that no browser would ever see.
+#
+# That is the vacuous-green shape this project keeps finding. One path now.
 
-    The block carries geometry; this picks the primitive and nothing else. No
-    arithmetic here or in ``app.charts`` --- every coordinate arrived formatted
-    from ``app.geometry``, which is the tier allowed to compute.
+def _chart_table(payload, meta) -> str:
+    """A chart's numbers, behind a disclosure, in the sanitised document.
+
+    Deliberately not inside the chart's iframe: the sanitiser allows this markup,
+    the page's stylesheet already covers it, and an opened <details> inside a
+    fixed-height iframe would be clipped.
     """
     from app import charts
 
-    form, geom = payload["form"], payload["geom"]
-    label, names = payload["label"], payload.get("names", ())
-
-    if form == "bars":
-        body = charts.bar_rows(geom, label=label)
-    elif form == "lines":
-        body = charts.line_series(geom, label=label, names=names)
-    elif form == "dumbbell":
-        body = charts.dumbbell_rows(geom, label=label, names=names)
-    else:
-        raise ValueError(f"no chart primitive for form {form!r}")
-
-    note = charts.axis_note(payload["note"]) if payload.get("note") else ""
-    table = payload.get("table")
-    view = (charts.table_view(tuple(table["columns"]), tuple(table["rows"]),
-                              label="View the numbers as a table")
-            if table else "")
-    return f'<figure class="chart-figure">{body}{note}{view}</figure>'
+    return charts.table_view(tuple(payload["columns"]),
+                             tuple(payload["rows"]),
+                             label="View the numbers as a table")
 
 
 RENDERERS = {
@@ -284,14 +280,19 @@ RENDERERS = {
     "caption": _caption, "markdown": _markdown, "callout": _callout,
     "divider": _divider, "panel": _panel, "standing": _standing,
     "figure": _figure, "span": _span, "cards": _cards,
-    "chart": _chart, "metrics": _metrics, "table": _table,
+    "metrics": _metrics, "table": _table, "chart_table": _chart_table,
     "expander": _expander,
 }
 
 # Kinds that are genuinely interactive and stay as Streamlit widgets. They are
 # listed rather than ignored: a block kind that is neither rendered here nor
 # named here is a programming error, and the composer raises on it.
-WIDGET_KINDS = ("request_form", "download", "style")
+# "chart" is here because SVG cannot survive st.html's sanitiser (DOMPurify with
+# USE_PROFILES: {html: true} drops every SVG tag), so a chart has to be rendered
+# into a components iframe by the dispatcher rather than composed into the
+# document. segments() already interleaves widgets with document runs, so this
+# needs no new machinery -- only an honest declaration of where a chart lives.
+WIDGET_KINDS = ("request_form", "download", "style", "chart")
 
 
 def render_block(block: Block) -> str:

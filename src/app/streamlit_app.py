@@ -97,6 +97,25 @@ def render_block(block: blocks_module.Block) -> None:
         st.download_button(meta.get("label", "Download"), payload,
                            file_name=meta.get("file_name", "report.md"),
                            mime="text/markdown")
+    elif kind == "chart":
+        # An iframe, because st.html sanitises with DOMPurify under
+        # USE_PROFILES: {html: true} and the HTML profile excludes SVG --
+        # every svg, rect, circle, polyline and text was stripped before it
+        # reached the DOM. components.v1.html writes srcDoc raw.
+        #
+        # AppTest does not sanitise, which is why 939 tests stayed green while
+        # the browser showed nothing. That is the failure shape this project
+        # exists to avoid, and it took looking at Streamlit's shipped bundle to
+        # find.
+        from app import charts
+
+        geom = payload["geom"]
+        body = charts.figure(payload)
+        st.components.v1.html(charts.frame_document(body),
+                              height=int(geom.frame_height), scrolling=False)
+        # The table view is its own block, rendered by the document composer
+        # into the sanitised page. The dispatcher used to render it here on the
+        # document's behalf, which put one chart across two renderers.
     elif kind == "style":
         st.markdown(payload, unsafe_allow_html=True)
     else:                                        # pragma: no cover - guarded

@@ -26,7 +26,7 @@ from app.view_model import ReportView
 KINDS = ("title", "caption", "heading", "markdown", "callout", "metrics",
          "table", "divider", "expander", "download", "request_form",
          "style", "figure", "span", "standing", "masthead", "panel",
-         "cards", "chart")
+         "cards", "chart", "chart_table")
 
 
 @dataclass(frozen=True)
@@ -162,9 +162,22 @@ def _chart(form: str, geom, *, label: str, names: tuple = (),
     Every chart ships a table view. It is the accessibility floor, and it is the
     honest answer to a reader who wants the values rather than the shape.
     """
-    return _b("chart", {"form": form, "geom": geom, "label": label,
-                        "names": tuple(names), "table": table,
-                        "note": note})
+    # TWO blocks, because they have two different homes.
+    #
+    # The SVG must go through a components iframe: st.html sanitises with
+    # DOMPurify under USE_PROFILES: {html: true} and the HTML profile strips
+    # every SVG tag. The table view must NOT -- it is plain HTML the sanitiser
+    # allows, the page's own stylesheet already covers it, and an opened
+    # <details> inside a fixed-height iframe would be clipped.
+    #
+    # Returning both keeps one renderer per block instead of the dispatcher
+    # quietly rendering a chart's table on the document's behalf.
+    chart = _b("chart", {"form": form, "geom": geom, "label": label,
+                         "names": tuple(names), "table": table,
+                         "note": note})
+    if not table:
+        return (chart,)
+    return (chart, _b("chart_table", table, label=label))
 
 
 def _adoption_blocks(view) -> list[Block]:
@@ -179,8 +192,8 @@ def _adoption_blocks(view) -> list[Block]:
     return [
         _b("heading", copy.ADOPTION_HEADING),
         _b("markdown", copy.adoption_intro(data)),
-        _chart("lines", data["geom"], label=copy.ADOPTION_HEADING,
-               names=data["names"], table=data["table"], note=data["note"]),
+        *_chart("lines", data["geom"], label=copy.ADOPTION_HEADING,
+                names=data["names"], table=data["table"], note=data["note"]),
         _b("markdown", copy.ADOPTION_WHY_IT_MATTERS),
         _b("divider"),
     ]
@@ -199,8 +212,8 @@ def _agreement_blocks(view) -> list[Block]:
     return [
         _b("heading", copy.AGREEMENT_HEADING),
         _b("markdown", copy.agreement_intro(data)),
-        _chart("dumbbell", data["geom"], label=copy.AGREEMENT_HEADING,
-               names=data["names"], table=data["table"]),
+        *_chart("dumbbell", data["geom"], label=copy.AGREEMENT_HEADING,
+                names=data["names"], table=data["table"]),
         _b("markdown", copy.agreement_reading(data)),
         _b("callout", copy.BOTH_RANKED_IN_ONE_COHORT, tone="info"),
         _b("caption", copy.agreement_granularity(data)),
@@ -241,10 +254,10 @@ def portfolio_blocks(view) -> list[Block]:
 
         _b("heading", copy.PORTFOLIO_HEADINGS["ranking"]),
         _b("markdown", copy.RANKING_INTRO),
-        _chart("bars", view.ranking_geometry,
-               label=f"Exposure by role, {view.roles_assessed} finance "
-                     f"occupations ranked",
-               table={"columns": cols, "rows": rows}),
+        *_chart("bars", view.ranking_geometry,
+                label=f"Exposure by role, {view.roles_assessed} finance "
+                      f"occupations ranked",
+                table={"columns": cols, "rows": rows}),
         _b("callout", copy.ranking_depth_note(view), tone="info"),
         _b("divider"),
 

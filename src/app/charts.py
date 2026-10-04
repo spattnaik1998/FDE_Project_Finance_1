@@ -372,3 +372,136 @@ def untraced_figures(markup: str, traced, identifiers=()) -> set[str]:
                 continue
             unaccounted.add(literal)
     return unaccounted
+
+# ---------------------------------------------------------------------------
+# The iframe document
+# ---------------------------------------------------------------------------
+#
+# st.html sanitises with DOMPurify under USE_PROFILES: {html: true}, and the HTML
+# profile excludes SVG -- so every svg, rect, circle, polyline, text, line, g,
+# defs and pattern was being stripped before it reached the DOM. The charts were
+# never invisible for a styling reason; they were not there.
+#
+# components.v1.html writes to an iframe's srcDoc with no sanitiser. An iframe
+# inherits nothing from the parent document, so the tokens and the fonts have to
+# travel with the chart. This is that payload, kept deliberately small: the
+# table view stays in the main document, where it is plain HTML the profile
+# allows and the page's own stylesheet already covers it.
+
+FRAME_CSS = """
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: transparent; }
+:root {
+  --paper: #FFFFFF; --panel: #F5F6F8; --ink: #1C1B1A; --ink-body: #33302E;
+  --ink-soft: #63605D; --ink-faint: #8E8B88; --rule: #E4E4E6;
+  --rule-firm: #DBDBDB; --navy: #0C2537;
+  --ramp-0: #8FB9D1; --ramp-1: #669BBB; --ramp-2: #427AA0;
+  --ramp-3: #215980; --ramp-4: #0C2537;
+  --series-0: #2E7DA8; --series-1: #A87A1E;
+  --hatch-bg: #F1F3F6; --hatch-ink: #8E8B88;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    --series-0: #0E8CD6; --series-1: #BC8C1C;
+    --hatch-bg: #1F2328; --hatch-ink: #6E7681;
+  }
+}
+svg.chart { width: 100%; height: auto; display: block; overflow: visible;
+            min-height: 160px; }
+.chart .c-label { font-family: 'Libre Franklin', system-ui, sans-serif;
+                  font-size: 12px; fill: var(--ink-body); }
+.chart .c-value, .chart .c-end {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-variant-numeric: tabular-nums; font-size: 12px; fill: var(--ink);
+  font-weight: 500; }
+.chart .c-tick { font-family: 'IBM Plex Mono', ui-monospace, monospace;
+                 font-variant-numeric: tabular-nums; font-size: 10px;
+                 fill: var(--ink-faint); }
+.chart .c-grid { stroke: var(--rule); }
+.chart .c-join { stroke: var(--rule-firm); }
+.chart .c-dot { stroke: var(--paper); }
+.chart .c-ramp-0 { fill: var(--ramp-0); }
+.chart .c-ramp-1 { fill: var(--ramp-1); }
+.chart .c-ramp-2 { fill: var(--ramp-2); }
+.chart .c-ramp-3 { fill: var(--ramp-3); }
+.chart .c-ramp-4 { fill: var(--ramp-4); }
+.chart .c-muted { fill: url(#hatch); }
+.chart circle.c-s0 { fill: var(--series-0); }
+.chart circle.c-s1 { fill: var(--series-1); }
+.chart polyline.c-s0 { stroke: var(--series-0); }
+.chart polyline.c-s1 { stroke: var(--series-1); }
+.chart .c-s0-ink, .chart .c-s1-ink { fill: var(--ink); }
+.chart .c-hatch-bg { fill: var(--hatch-bg); }
+.chart .c-hatch-line { stroke: var(--hatch-ink); }
+.chart .c-hit { fill: transparent; }
+.chart .c-cross { stroke: var(--ink-faint); stroke-width: 1; opacity: 0;
+                  pointer-events: none; }
+.chart .c-slot:hover .c-cross { opacity: 1; }
+.chart .c-bar { transition: opacity .12s ease; }
+svg.chart:hover .c-bar { opacity: .72; }
+.chart .c-bar:hover { opacity: 1; }
+.c-legend { display: flex; flex-wrap: wrap; gap: 1.2rem; margin: .5rem 0 0;
+  font-family: 'Libre Franklin', system-ui, sans-serif; font-size: .76rem;
+  color: var(--ink-soft); }
+.c-key { display: inline-flex; align-items: center; gap: .4rem; }
+.c-key > i { width: 10px; height: 10px; border-radius: 1px;
+             display: inline-block; }
+.c-s0-bg { background: var(--series-0); }
+.c-s1-bg { background: var(--series-1); }
+.c-axis-note { font-family: 'Libre Franklin', system-ui, sans-serif;
+  font-size: .73rem; line-height: 1.5; color: var(--ink-faint);
+  margin: .5rem 0 0; max-width: 56ch; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+@media (forced-colors: active) {
+  .chart .c-bar, .chart .c-dot { forced-color-adjust: none;
+                                 stroke: CanvasText; }
+  .chart .c-muted { fill: Canvas; stroke-dasharray: 2 2; }
+  .chart .c-cross { stroke: CanvasText; }
+}
+"""
+
+FRAME_FONTS = ("https://fonts.googleapis.com/css2?family=Libre+Franklin:"
+               "wght@400;500;600&family=IBM+Plex+Mono:wght@400;500"
+               "&display=swap")
+
+
+def frame_document(body: str) -> str:
+    """A complete document for the chart iframe: tokens, fonts, then the SVG."""
+    return (f'<!doctype html><html><head><meta charset="utf-8">'
+            f'<link rel="stylesheet" href="{FRAME_FONTS}">'
+            f"<style>{FRAME_CSS}</style></head><body>{body}</body></html>")
+
+
+def figure(payload) -> str:
+    """One chart's full markup: the SVG, its legend, and its axis note.
+
+    The single definition of "what a chart looks like". The dispatcher puts this
+    inside a components iframe, because st.html's sanitiser strips SVG; tests
+    call it to assert on the same string the browser receives.
+
+    It exists because ten tests were asserting chart markup inside
+    ``document.compose(...)``, and all ten broke together when charts moved to an
+    iframe. A test reading a string the browser never sees is the failure this
+    project keeps finding, so there is now one place that string comes from.
+    """
+    form, geom = payload["form"], payload["geom"]
+    label, names = payload["label"], payload.get("names", ())
+
+    if form == "bars":
+        body = bar_rows(geom, label=label)
+    elif form == "lines":
+        body = line_series(geom, label=label, names=names)
+    elif form == "dumbbell":
+        body = dumbbell_rows(geom, label=label, names=names)
+    else:
+        raise ValueError(f"no chart primitive for form {form!r}")
+
+    note = axis_note(payload["note"]) if payload.get("note") else ""
+    return body + note
+
+
+def page_charts(blocks) -> str:
+    """Every chart on a page, concatenated. For tests and verification."""
+    return " ".join(figure(block.payload) for block in blocks
+                    if block.kind == "chart")
+

@@ -208,3 +208,26 @@ def lag_claims() -> list[dict]:
          "quote": "Our model generates a Productivity J-Curve that can explain "
                   "the productivity slowdowns often accompanying the advent of GPTs."},
     ]
+
+
+def chart_frames(app) -> str:
+    """The markup of every chart iframe on a rendered page, concatenated.
+
+    Charts do not live in the main document. ``st.html`` sanitises with
+    DOMPurify under ``USE_PROFILES: {html: true}``, and the HTML profile excludes
+    SVG --- so every ``svg``, ``rect``, ``circle``, ``polyline`` and ``text`` was
+    stripped before reaching the DOM. ``components.v1.html`` writes to an
+    iframe's ``srcDoc`` with no sanitiser, which is where they go instead.
+
+    One helper, because four tests were reading ``app.get("html")`` for SVG and
+    all four broke together when the charts moved. A test that looks in the
+    wrong place is indistinguishable from a chart that is missing.
+    """
+    return " ".join(str(getattr(element, "proto", element))
+                    for element in app.get("iframe"))
+
+
+def page_markup(app) -> str:
+    """The main document's markup: everything the sanitiser does allow."""
+    return " ".join(element.proto.body for element in app.get("html"))
+

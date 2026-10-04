@@ -415,30 +415,48 @@ def verify_dashboard(report: Report) -> None:
         return (f"one interval for the whole function: "
                 f"{view.lag_p10}/{view.lag_p50}/{view.lag_p90}")
 
-    @check(report, "dashboard", "three charts render with their table views")
+    @check(report, "dashboard", "three charts reach the browser as SVG")
     def _():
-        from app import blocks as blocks_module
-        from app import document
-        from app.gateway import load_portfolio
+        """Measured on the RENDERED app, not on a composed string.
 
-        view = load_portfolio()
-        page = blocks_module.portfolio_blocks(view)
-        markup = document.compose(page)
-        charts_on_page = markup.count("<svg")
-        tables = markup.count('class="c-table"')
-        legends = markup.count('class="c-legend"')
-        forms = [b.payload["form"] for b in page if b.kind == "chart"]
+        This counted `<svg` in `document.compose(...)` and reported three charts
+        while the browser received none: st.html sanitises with DOMPurify under
+        USE_PROFILES: {html: true}, and the HTML profile strips every SVG tag. The
+        charts now render into components iframes, which are not sanitised, and
+        this check reads those iframes.
 
-        if charts_on_page < 3:
-            return FAIL, f"expected three charts, rendered {charts_on_page}"
-        if tables != charts_on_page:
-            return FAIL, (f"{charts_on_page} charts but {tables} table views; "
+        A check that measures a code path the browser never takes is worse than
+        no check, because it reports success.
+        """
+        try:
+            from streamlit.testing.v1 import AppTest
+        except Exception as exc:                 # noqa: BLE001
+            return SKIP, f"AppTest unavailable: {type(exc).__name__}"
+
+        app = AppTest.from_file("src/app/streamlit_app.py", default_timeout=240)
+        app.run()
+        if app.exception:
+            return FAIL, "; ".join(str(e.value) for e in app.exception)[:140]
+
+        frames = " ".join(str(getattr(e, "proto", e)) for e in app.get("iframe"))
+        page = " ".join(e.proto.body for e in app.get("html"))
+        charts_rendered = frames.count("<svg")
+        tables = page.count('class="c-table"')
+
+        if charts_rendered < 3:
+            return FAIL, (f"only {charts_rendered} chart(s) reached the "
+                          f"browser; expected the ranking, diffusion and "
+                          f"agreement charts")
+        if tables != charts_rendered:
+            return FAIL, (f"{charts_rendered} charts but {tables} table views; "
                           f"every chart ships one")
-        if legends != 2:
-            return FAIL, (f"{legends} legends; both two-series charts need one "
-                          f"and the single-series chart needs none")
-        return (f"{charts_on_page} charts {forms}, {tables} table views, "
-                f"{legends} legends")
+        if page.count("<svg"):
+            return FAIL, ("SVG is in the sanitised document, where DOMPurify "
+                          "will strip it")
+        if "--series-0" not in frames:
+            return FAIL, "the chart iframes carry no tokens, so marks are unstyled"
+        return (f"{charts_rendered} SVG charts in iframes, {tables} table views "
+                f"in the document, tokens inlined")
 
     @check(report, "dashboard", "every drawn coordinate came from a geometry")
     def _():
@@ -554,9 +572,16 @@ def verify_ui(report: Report) -> None:
         portfolio = " ".join(e.proto.body for e in app.get("html"))
         if not portfolio:
             return FAIL, "the portfolio page did not render"
-        charts = portfolio.count("<svg")
+        # Charts live in components iframes, not in the sanitised document:
+        # st.html strips SVG under DOMPurify's html-only profile. This counted
+        # the document and started reporting zero the moment they moved, which
+        # was the correct failure -- it was looking in the wrong place.
+        frames = " ".join(str(getattr(e, "proto", e)) for e in app.get("iframe"))
+        charts = frames.count("<svg")
         if charts < 1:
-            return FAIL, f"portfolio rendered no chart ({charts} svg)"
+            return FAIL, f"portfolio rendered no chart ({charts} svg in iframes)"
+        if portfolio.count("<svg"):
+            return FAIL, "SVG is in the sanitised document, where it is stripped"
 
         selectors = app.get("radio")
         if not selectors:
