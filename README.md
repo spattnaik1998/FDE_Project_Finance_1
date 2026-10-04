@@ -705,6 +705,123 @@ ids) rather than findings — and `test_no_code_span_is_purely_numeric` closes
 the loophole that would otherwise open, so a figure cannot be smuggled in by
 wrapping it in backticks.
 
+## Dashboard layer (W10–W16 — complete)
+
+```bash
+python scripts/run_ui.py                         # Portfolio is the default view
+python scripts/verify_stack.py --layer dashboard # 6 checks on the chart chain
+```
+
+The customer asked which of our cost **lines** are exposed — plural. Everything
+through W9 answered one role at a time. The portfolio page is the plural answer:
+twelve finance roles ranked, one shared timetable, and two analytical charts.
+
+### Not a KPI grid
+
+A conventional metrics dashboard is precisely what this architecture refuses:
+numbers lifted away from their reasoning and laid side by side, inviting
+comparison between quantities that must not be compared. Three refusals survive
+into the dashboard or it does not ship.
+
+**The lag appears exactly once.** All thirty persisted verdicts carry p10 5.0 /
+p50 10.1 / p90 30.0, because it is estimated from sector-level adoption evidence
+and does not vary by occupation. `CohortRowView` therefore has **no lag field at
+all**, so a per-role column is unrepresentable rather than discouraged, and a
+test counts the figure's occurrences on the page. That criterion failed on its
+first run and caught a prose sentence restating the span — the page lost the
+sentence, not the test its criterion.
+
+**No average across roles.** Twelve occupations of different headcount, and
+headcount is not in the warehouse. An unweighted mean describes nobody. The range
+is offered, the absence is stated on the page, and a test rejects any
+mean/average/avg field or `AVG()` in the query.
+
+**Nine of twelve rows are one number each.** Only three occupations have a full
+persisted run; the rest exist as a single cohort index. Those bars are **hatched**
+rather than merely unlinked, with a sentence above the chart saying so — texture
+rather than a tint, so the distinction survives greyscale, print and
+forced-colors.
+
+### Three charts, chosen by the data's job
+
+| Chart | Form | Why |
+|---|---|---|
+| Exposure by role | horizontal bars, sequential ramp | twelve long-named categories exceed any categorical palette, so magnitude carries the colour |
+| Adoption diffusion | two lines, 21 fortnightly points | the only true change-over-time data in the warehouse |
+| Rank agreement | dumbbell, one row per role | the distance between the marks **is** the finding; a single delta cannot show it |
+
+Rejected: dual-axis anything (exposure 0–1, adoption %, lag years are three
+scales), gauges, treemaps, and sparklines on the tiles — there is no per-role time
+series, so a sparkline would draw noise across unrelated runs.
+
+### No plotting library
+
+Chart geometry is a figure, and a library computes it outside the traced path.
+`app/geometry.py` computes and returns pre-formatted strings; `app/charts.py`
+emits SVG and does **no arithmetic**, enforced by an `ast` parse. A test asserts
+matplotlib, plotly, altair, bokeh, seaborn and pandas are all absent.
+
+That rule does not admit exceptions. A division for the crosshair's hit-band
+width landed in `charts.py` during W14 and the parse test caught it on the next
+run; the width moved to `ChartGeometry.hit_band`.
+
+### The chain now runs to both halves of a chart
+
+**Printed values** — every `<text>` and `<title>` node is scanned and rejected if
+the view model did not carry it. `charts.untraced_figures` is the one definition,
+used by the suite and by `verify_stack` so they cannot report different things
+about the same page.
+
+**Drawn positions** — `charts.unaccounted_coordinates` checks that every
+coordinate attribute came from a geometry. This was the real W15 gap: a reader
+cannot read "101.6", so the text scan never saw it, and a mark could be drawn at
+a position nothing computed. 142 drawn positions on the current page, all
+accounted for. A companion test moves a rect to an invented coordinate and proves
+the audit reports it.
+
+The two checks cover disjoint sets — a reader reads `0.703`, the renderer draws
+`246.2` — and a test asserts they do not overlap, so neither can appear to cover
+the other.
+
+Identifiers are stripped from a line rather than excusing it. `gpt-5.4-mini`
+excuses `5.4` and nothing else; the first cut skipped any line naming an
+identifier, which excused the two real figures sitting beside the cohort name in
+the masthead.
+
+### The palette, validated not chosen
+
+| Slot | Light | Dark |
+|---|---|---|
+| Sequential ramp | `#8FB9D1` → `#669BBB` → `#427AA0` → `#215980` → `#0C2537` | — |
+| Series 1 | `#2E7DA8` | `#0E8CD6` |
+| Series 2 | `#A87A1E` | `#BC8C1C` |
+
+All checked with the data-viz validator. The project's structural navy **failed**
+as a series colour — OKLCH L 0.255, outside the 0.43–0.77 band, and chroma 0.046,
+which reads gray — so it is the ramp's darkest step and the series hues are lifted
+versions that pass. The dark pair was **re-stepped and re-validated against the
+dark surface**, not flipped: the light hues fail the dark band, because blues lose
+chroma at mid lightness.
+
+`#CC0000` encodes no value anywhere. A bar in the brand's accent reads as an
+alarm, which tells a reader something the number does not say.
+
+The page itself is pinned light by `.streamlit/config.toml`, deliberately — it
+reads as an institutional paper. The dark steps exist so the charts do not break
+if the surface ever changes, not because a toggle ships today.
+
+### Interaction without JavaScript
+
+`st.html` executes none, verified in Streamlit's own source. The crosshair is one
+invisible hit band per period revealing a sibling rule, carrying a readout that
+names **every** series at that period — which a per-mark tooltip cannot do, since
+hovering one dot gives one value and the question at a point on a trend is what
+both lines were doing.
+
+Keyboard and assistive-technology readers get no hover layer at all. That is why
+every chart ships a table view rather than treating it as an extra, and why
+`verify_stack` fails if the counts disagree.
+
 ## Presentation tier (W8 — complete)
 
 ```bash

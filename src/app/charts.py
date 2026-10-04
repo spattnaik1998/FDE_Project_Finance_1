@@ -246,3 +246,113 @@ def _hatch_pattern() -> str:
             '<rect class="c-hatch-bg" width="6" height="6"/>'
             '<line class="c-hatch-line" x1="0" y1="0" x2="0" y2="6" '
             'stroke-width="1.5"/></pattern></defs>')
+
+# ---------------------------------------------------------------------------
+# Auditing what was drawn
+# ---------------------------------------------------------------------------
+#
+# The traceability chain had two halves and only one was checked. Printed values
+# are covered: the rendered-text scan reads every ``<text>`` and ``<title>`` node
+# and rejects a number the view model did not carry. Drawn POSITIONS were not --
+# a renderer could place a mark at a coordinate nothing computed and no test
+# would notice, because a reader cannot read "101.6" off the page and so the text
+# scan never sees it.
+#
+# This closes it. Every coordinate attribute in the markup must come from the
+# geometry that produced the chart, or be one of the fixed literals the mark
+# specs put there.
+
+# Fixed by the mark specs, not derived from data. Enumerated rather than matched
+# by pattern, so adding a magic number to a primitive is a deliberate act.
+SPEC_LITERALS = frozenset({
+    "0",            # every axis origin, and a zero-length bar
+    "1", "1.5", "2",  # hairline, hatch stroke, line and ring widths
+    "4", "4.5",     # the bar's corner radius and the marker radius
+    "6",            # the hatch tile
+    "10",           # the end label's dx offset
+})
+
+COORDINATE_ATTRIBUTES = ("x", "y", "cx", "cy", "x1", "x2", "y1", "y2",
+                         "width", "height", "r", "rx", "stroke-width", "dx")
+
+
+def unaccounted_coordinates(markup: str, *geometries) -> set[str]:
+    """Coordinates in the markup that no geometry produced.
+
+    A non-empty result means a mark is drawn at a position nothing computed,
+    which is the drawn-position equivalent of an untraced figure. Used by the
+    tests and by ``verify_stack`` so there is one definition of the rule.
+    """
+    import re
+
+    produced = set(SPEC_LITERALS)
+    for geometry in geometries:
+        if geometry is None:
+            continue
+        produced |= set(geometry.layout) | set(geometry.figures)
+        produced.add(geometry.width)
+        produced.add(geometry.height)
+        produced.add(getattr(geometry, "hit_band", "0"))
+        # Polyline point lists carry their own coordinates.
+        for mark in geometry.marks:
+            for value in str(mark.get("points", "")).replace(",", " ").split():
+                produced.add(value)
+            produced.update(
+                str(mark[key]) for key in
+                ("x", "y", "length", "thickness", "label_y", "value_x",
+                 "left_x", "right_x", "from_x", "to_x", "radius",
+                 "end_x", "end_y")
+                if key in mark)
+            for dot in mark.get("dots", ()):
+                produced.update(str(dot[k]) for k in ("x", "y") if k in dot)
+        produced.update(str(tick[k]) for tick in geometry.axis
+                        for k in ("x", "y") if k in tick)
+
+    pattern = "|".join(COORDINATE_ATTRIBUTES)
+    found = set(re.findall(rf'(?:{pattern})="([\d.]+)"', markup))
+    # A percentage width is a share, handled by the figure scan.
+    return {value for value in found if value not in produced}
+
+def untraced_figures(markup: str, traced, identifiers=()) -> set[str]:
+    """Numbers a reader can read on the page that are not traced.
+
+    Reads element content, which is where a reader's numbers live: ``<text>`` and
+    ``<title>`` nodes are content rather than tags, so stripping tags exposes
+    them. Attribute coordinates are deliberately NOT in scope --- a reader cannot
+    read "101.6" --- and :func:`unaccounted_coordinates` covers those instead.
+
+    ``identifiers`` are strings that name rather than measure: a model name, a
+    rubric version, a cohort name. A line containing one is skipped, because
+    "gpt-5.4-mini" is not a claim that 5.4 is a quantity. The alternative was to
+    add such fragments to the traced set, which would assert exactly that.
+
+    One definition for the suite and for ``verify_stack``, so the two cannot
+    drift and report different things about the same page.
+    """
+    import re
+
+    from nodes.figure_guard import _numbers_in
+    from report.provenance import _is_furniture
+
+    text = re.sub(r"<[^>]+>", chr(10), markup)
+    for entity, char in (("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"),
+                         ("&quot;", '"'), ("&#x27;", "'")):
+        text = text.replace(entity, char)
+
+    unaccounted = set()
+    for line in text.splitlines():
+        # The identifier is REMOVED from the line, not used to skip it.
+        #
+        # Skipping the whole line was the first cut and it was a loophole: the
+        # masthead reads "12 roles · 231 tasks · cohort finance_13_2", so naming
+        # the cohort there excused two real figures on the same line. Stripping
+        # the identifier leaves the rest of the line to be checked, which is
+        # what was wanted -- "gpt-5.4-mini" excuses 5.4 and nothing else.
+        stripped = line
+        for name in identifiers:
+            stripped = stripped.replace(name, " ")
+        for literal, value in _numbers_in(stripped):
+            if literal in traced or _is_furniture(literal, value, stripped):
+                continue
+            unaccounted.add(literal)
+    return unaccounted

@@ -375,6 +375,143 @@ def verify_pipeline(report: Report, *, with_models: bool) -> None:
 # 6. Presentation tier
 # ===========================================================================
 
+def verify_dashboard(report: Report) -> None:
+    """The dashboard layer: the cohort read path, the charts, and their chain.
+
+    Separate from the ui layer because it checks different claims. The ui layer
+    asks whether the app runs and stays on loopback; this asks whether the
+    portfolio page's numbers and marks are accountable.
+    """
+    @check(report, "dashboard", "cohort read path returns one reference set")
+    def _():
+        from app.gateway import load_cohort
+
+        view = load_cohort()
+        if len(view.rows) < 10:
+            return FAIL, (f"only {len(view.rows)} roles; a percentile needs "
+                          f"at least ten")
+        drillable = int(view.drillable_roles)
+        return (f"{view.roles_assessed} roles, {view.tasks_assessed} tasks, "
+                f"{drillable} examined in depth, "
+                f"{view.exposure_low}-{view.exposure_high} spread, "
+                f"classifier={view.classifier}")
+
+    @check(report, "dashboard", "the lag is single-valued across the cohort")
+    def _():
+        """It is estimated from sector adoption, so it must not vary by role.
+
+        Checked here as well as in the suite because this is the claim a
+        per-role column would quietly break, and the audit script would not
+        notice: the data would still be valid, only the page would lie.
+        """
+        from app.gateway import load_cohort
+        from app.view_model import CohortRowView
+
+        view = load_cohort()
+        if any("lag" in field for field in CohortRowView.__dataclass_fields__):
+            return FAIL, "CohortRowView carries a per-role lag field"
+        if view.lag_p50 == "not identifiable":
+            return FAIL, "the cohort reports no timetable at all"
+        return (f"one interval for the whole function: "
+                f"{view.lag_p10}/{view.lag_p50}/{view.lag_p90}")
+
+    @check(report, "dashboard", "three charts render with their table views")
+    def _():
+        from app import blocks as blocks_module
+        from app import document
+        from app.gateway import load_portfolio
+
+        view = load_portfolio()
+        page = blocks_module.portfolio_blocks(view)
+        markup = document.compose(page)
+        charts_on_page = markup.count("<svg")
+        tables = markup.count('class="c-table"')
+        legends = markup.count('class="c-legend"')
+        forms = [b.payload["form"] for b in page if b.kind == "chart"]
+
+        if charts_on_page < 3:
+            return FAIL, f"expected three charts, rendered {charts_on_page}"
+        if tables != charts_on_page:
+            return FAIL, (f"{charts_on_page} charts but {tables} table views; "
+                          f"every chart ships one")
+        if legends != 2:
+            return FAIL, (f"{legends} legends; both two-series charts need one "
+                          f"and the single-series chart needs none")
+        return (f"{charts_on_page} charts {forms}, {tables} table views, "
+                f"{legends} legends")
+
+    @check(report, "dashboard", "every drawn coordinate came from a geometry")
+    def _():
+        """The second half of the traceability chain.
+
+        Printed values are covered by the figure scan; this covers the
+        positions, which a reader cannot read and a text scan never sees.
+        """
+        from app import blocks as blocks_module
+        from app import charts, document
+        from app.gateway import load_portfolio
+
+        page = blocks_module.portfolio_blocks(load_portfolio())
+        geometries = [b.payload["geom"] for b in page if b.kind == "chart"]
+        markup = document.compose(page)
+        unaccounted = charts.unaccounted_coordinates(markup, *geometries)
+        if unaccounted:
+            return FAIL, (f"coordinates no geometry produced: "
+                          f"{sorted(unaccounted)[:6]}")
+        drawn = sum(len(g.layout) for g in geometries)
+        return f"{drawn} drawn positions, all from geometry"
+
+    @check(report, "dashboard", "no page figure escapes the traced set")
+    def _():
+        from app import blocks as blocks_module
+        from app import charts, document
+        from app.gateway import load_portfolio
+
+        view = load_portfolio()
+        markup = document.compose(blocks_module.portfolio_blocks(view))
+        unaccounted = charts.untraced_figures(markup, view.figures,
+                                              view.identifiers)
+        if unaccounted:
+            return FAIL, f"untraced figures: {sorted(unaccounted)[:6]}"
+        return (f"{len(view.figures)} traced literals, 0 untraced; "
+                f"identifiers excluded: {', '.join(view.identifiers)}")
+
+    @check(report, "dashboard", "the chart palette is the validated one")
+    def _():
+        """Pinned, because a palette drifts one edit at a time.
+
+        The dark steps are checked inside their own override blocks: a flip back
+        to the light pair ships a palette that fails the dark band, and it
+        passed an earlier version of this check that only looked for the values
+        somewhere in the file.
+        """
+        from app import charts
+        from app.style import STYLESHEET
+
+        if charts.RAMP != ("#8FB9D1", "#669BBB", "#427AA0", "#215980",
+                           "#0C2537"):
+            return FAIL, f"the sequential ramp changed: {charts.RAMP}"
+        if charts.SERIES != ("#2E7DA8", "#A87A1E"):
+            return FAIL, f"the series pair changed: {charts.SERIES}"
+        for red in ("#CC0000", "#C31420"):
+            if red in charts.__doc__ or any(
+                    red in value for value in
+                    charts.RAMP + charts.SERIES + charts.SERIES_DARK):
+                return FAIL, f"the brand red {red} is encoding data"
+        for scope in ('@media (prefers-color-scheme: dark)',
+                      ':root[data-theme="dark"]'):
+            block = STYLESHEET[STYLESHEET.index(scope):][:400]
+            for value in charts.SERIES_DARK:
+                if value not in block:
+                    return FAIL, f"{value} is not set in {scope}"
+            for value in charts.SERIES:
+                if value in block:
+                    return FAIL, f"{scope} sets the light hue {value}"
+        return (f"ramp {len(charts.RAMP)} steps, {len(charts.SERIES)} series, "
+                f"dark steps validated in both scopes, no brand red in data")
+
+
+
 def verify_ui(report: Report) -> None:
     header("6. PRESENTATION TIER  —  renders a persisted run, loopback only")
 
@@ -479,6 +616,7 @@ def main() -> int:
     parser.add_argument("--no-models", action="store_true",
                         help="Skip paid model calls and the pipeline run")
     parser.add_argument("--layer", choices=["creds", "data", "models", "db",
+                                           "dashboard",
                                             "pipeline", "ui"], default=None)
     args = parser.parse_args()
 
@@ -500,12 +638,15 @@ def main() -> int:
         verify_database(report)
     if want("pipeline"):
         verify_pipeline(report, with_models=not args.no_models)
+    if want("dashboard"):
+        verify_dashboard(report)
     if want("ui"):
         verify_ui(report)
 
     counts = report.counts()
     header("SUMMARY")
-    for layer in ("creds", "data", "models", "db", "pipeline", "ui"):
+    for layer in ("creds", "data", "models", "db", "pipeline", "dashboard",
+                  "ui"):
         rows = [r for r in report.results if r.layer == layer]
         if rows:
             ok = sum(1 for r in rows if r.status == PASS)

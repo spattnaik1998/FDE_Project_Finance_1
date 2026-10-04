@@ -172,6 +172,25 @@ class CohortView:
     def rows_with_full_run(self) -> tuple[CohortRowView, ...]:
         return tuple(r for r in self.rows if r.has_full_run)
 
+    @property
+    def identifiers(self) -> tuple[str, ...]:
+        """Strings on the page that name something rather than measure it.
+
+        The page's figure scan rejects any number the view model did not carry,
+        and it found "5.4" --- a fragment of the model name ``gpt-5.4-mini`` in
+        the audit footer. That is an identifier, and adding it to the traced
+        figures would be the wrong fix: it would assert that 5.4 is a quantity
+        this analysis produced.
+
+        The report tier already draws this line for run ids and git shas. This
+        is the same distinction for the cohort page, declared by the view rather
+        than hardcoded in each checker, so one definition serves the tests and
+        the stack verification.
+        """
+        return tuple(value for value in
+                     (self.classifier, self.rubric_version, self.cohort_name)
+                     if value)
+
 
 @dataclass(frozen=True)
 class ReportView:

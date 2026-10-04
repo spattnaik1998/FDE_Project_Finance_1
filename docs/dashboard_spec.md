@@ -403,6 +403,22 @@ current tag-stripping regex removes.
 *Acceptance:* a companion test injects an untraceable coordinate and proves the
 check catches it. Without that, the extension is decoration.
 
+**Status: complete.** 13 tests in `tests/test_chart_provenance.py`.
+
+**A correction to this spec.** It said the tag-stripping regex *removes* SVG
+text, so the scan would need extending to reach it. That was wrong, and verified
+rather than trusted: `<text>0.703</text>` is element content, not a tag, so the
+existing scan already read it.
+
+The real gap was the 134 coordinate **attributes**, which the text scan cannot
+see by design — a reader cannot read `101.6` — and which nothing checked came from
+a geometry at all. `charts.unaccounted_coordinates` closes it: 142 drawn
+positions on the current page, all accounted for, with the allowed fixed literals
+enumerated rather than pattern-matched so adding a magic number is a deliberate
+act. A companion test moves a rect to an invented coordinate and asserts the
+audit reports exactly that value, and another asserts the two checks cover
+disjoint sets so neither can appear to cover the other.
+
 *Depends on:* W11–W13.
 
 ### W16 — Verification and documentation
@@ -412,7 +428,36 @@ zero as a pass. README section. Palette recorded with its validator output.
 
 *Depends on:* all of the above.
 
+**Status: complete.** `verify_stack.py --layer dashboard`, 6 checks, all passing:
+the cohort read path, the lag being single-valued, three charts with their table
+views and legends, every drawn coordinate from a geometry, no untraced figure on
+the page, and the palette pinned with its dark steps checked inside their own
+override blocks. README section added.
+
+`charts.untraced_figures` is the single definition the suite and the verifier both
+use, so they cannot report different things about the same page. Building it found
+one defect: the first version skipped any line naming an identifier, which excused
+the two real figures sitting beside the cohort name in the masthead. The
+identifier is now stripped from the line and the remainder still checked, so
+`gpt-5.4-mini` excuses `5.4` and nothing else.
+
 ---
+
+## 6a. Layer complete
+
+| | |
+|---|---|
+| Workstreams | W10–W16, all complete |
+| Tests | 931 pass, 2 skip, verified in five orders |
+| Stack | `--layer dashboard` 6/6; full stack 27 pass, 1 fail, 1 skip |
+| Guardrails | 17/17 adversarially verified |
+| Warehouse audit | 46 checks, 0 failed, 1 warning |
+| Privileges | 36 assertions across four principals |
+
+The one stack failure is BEA returning **HTTP 503 "The service is unavailable"**,
+confirmed with a raw probe that bypasses our adapter. Their outage, not our code —
+and it does not touch the app: BEA's 11,088 rows are already in the warehouse, and
+a static check confirms no module in `app/` can import an HTTP client at all.
 
 ## 7. Decisions I need from you
 
