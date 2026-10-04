@@ -152,7 +152,7 @@ def refusal_blocks(refusal) -> list[Block]:
 
 
 def _chart(form: str, geom, *, label: str, names: tuple = (),
-           table: dict | None = None) -> Block:
+           table: dict | None = None, note: str = "") -> Block:
     """A chart as data: the form, its geometry, and its table view.
 
     The payload carries a :class:`~app.geometry.ChartGeometry`, not rendered
@@ -163,7 +163,49 @@ def _chart(form: str, geom, *, label: str, names: tuple = (),
     honest answer to a reader who wants the values rather than the shape.
     """
     return _b("chart", {"form": form, "geom": geom, "label": label,
-                        "names": tuple(names), "table": table})
+                        "names": tuple(names), "table": table,
+                        "note": note})
+
+
+def _adoption_blocks(view) -> list[Block]:
+    """The diffusion curve, or nothing at all.
+
+    Absent rather than empty: a chart frame with no line in it reads as a
+    rendering fault, and the page is better one section shorter.
+    """
+    data = view.adoption
+    if not data:
+        return []
+    return [
+        _b("heading", copy.ADOPTION_HEADING),
+        _b("markdown", copy.adoption_intro(data)),
+        _chart("lines", data["geom"], label=copy.ADOPTION_HEADING,
+               names=data["names"], table=data["table"], note=data["note"]),
+        _b("markdown", copy.ADOPTION_WHY_IT_MATTERS),
+        _b("divider"),
+    ]
+
+
+def _agreement_blocks(view) -> list[Block]:
+    """The rank-agreement dumbbell: the calibration argument, drawn.
+
+    The distance between the two marks on a row IS the finding, which is why a
+    single delta number cannot replace this chart. The aggregate correlation is
+    stated beside it, with both halves of what it means.
+    """
+    data = view.rank_agreement
+    if not data:
+        return []
+    return [
+        _b("heading", copy.AGREEMENT_HEADING),
+        _b("markdown", copy.agreement_intro(data)),
+        _chart("dumbbell", data["geom"], label=copy.AGREEMENT_HEADING,
+               names=data["names"], table=data["table"]),
+        _b("markdown", copy.agreement_reading(data)),
+        _b("callout", copy.BOTH_RANKED_IN_ONE_COHORT, tone="info"),
+        _b("caption", copy.agreement_granularity(data)),
+        _b("divider"),
+    ]
 
 
 def portfolio_blocks(view) -> list[Block]:
@@ -221,6 +263,8 @@ def portfolio_blocks(view) -> list[Block]:
         # is the redundancy already cut from the role report's section 2.
         _b("callout", copy.TIMETABLE_IS_SHARED, tone="info"),
         _b("divider"),
+
+    ] + _adoption_blocks(view) + _agreement_blocks(view) + [
 
         _b("heading", copy.PORTFOLIO_HEADINGS["limits"]),
         _b("markdown", copy.PORTFOLIO_LIMITS),

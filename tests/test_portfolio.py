@@ -266,7 +266,9 @@ def test_the_page_builder_performs_no_arithmetic():
 def test_the_ui_module_does_not_reach_the_warehouse_for_the_cohort():
     """The portfolio page goes through the gateway like everything else."""
     source = UI_MODULE.read_text(encoding="utf-8")
-    assert "load_cohort" in source
+    assert "load_portfolio" in source, (
+        "the page composes through one gateway call, which W13 made "
+        "load_portfolio so the two analytical charts can degrade separately")
     for forbidden in ("pyodbc", "score.cohort_index", "connect("):
         assert forbidden not in source, f"the UI module references {forbidden}"
 
@@ -316,11 +318,20 @@ def test_the_app_renders_the_portfolio_without_raising(executed_app):
     assert len(executed_app.error) == 0, [e.value for e in executed_app.error]
 
 
-def test_the_rendered_page_contains_one_chart_with_its_table(executed_app):
+def test_the_rendered_page_contains_a_chart_per_section(executed_app):
+    """W13 added the diffusion curve and the rank-agreement dumbbell.
+
+    This asserted exactly one chart and broke the moment the page grew, which is
+    the right behaviour: it was a statement about a page with one chart. Counted
+    as a floor now, with every chart shipping its table view, so the next
+    addition does not require editing a number here.
+    """
     markup = " ".join(e.proto.body for e in executed_app.get("html"))
-    assert markup.count("<svg") == 1
+    charts = markup.count("<svg")
+    assert charts >= 3, f"expected the ranking, diffusion and agreement charts; got {charts}"
     assert 'class="chart-figure"' in markup
-    assert 'class="c-table"' in markup, "the chart must ship a table view"
+    assert markup.count('class="c-table"') == charts, (
+        "every chart ships a table view")
 
 
 def test_the_rendered_chart_marks_the_rows_that_cannot_be_opened(executed_app):

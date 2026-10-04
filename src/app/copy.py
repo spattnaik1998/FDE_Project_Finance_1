@@ -637,3 +637,77 @@ NO_AVERAGE_NOTE = (
     "mean across twelve occupations of different size describes nobody."
 )
 
+# ---------------------------------------------------------------------------
+# W13: the diffusion curve and the rank-agreement chart
+# ---------------------------------------------------------------------------
+
+ADOPTION_HEADING = "How fast finance firms are actually adopting this"
+AGREEMENT_HEADING = "Does an independent source rank these roles the same way?"
+
+
+def adoption_intro(data) -> str:
+    return (
+        f"Two series, {data['periods']} fortnightly readings each. The lower "
+        f"line is the share of finance firms using AI to produce goods or "
+        f"services now; the upper line is the share expecting to within six "
+        f"months. The gap between them is the part of the timetable that has not "
+        f"happened yet.")
+
+
+ADOPTION_WHY_IT_MATTERS = (
+    "This is the evidence the timetable rests on. It is also why the timetable "
+    "is a wide range rather than a date: under a year of readings cannot show "
+    "where a curve levels off, so we report what has been observed and decline "
+    "to extend it."
+)
+
+
+def agreement_intro(data) -> str:
+    return (
+        f"Each row is one role, with two marks: where our rubric ranks it among "
+        f"these {data['cohort_size']} finance occupations, and where the "
+        f"published academic index ranks it among the same "
+        f"{data['cohort_size']}. A short bar means the two agree about that "
+        f"role. A long one means they do not.")
+
+
+def agreement_reading(data) -> str:
+    """The aggregate, stated as what it is rather than as a verdict.
+
+    A negative rank correlation on an under-powered benchmark is weak evidence
+    about our rubric, not strong evidence against it. The sentence says both
+    halves, because stating only the first would overclaim and stating only the
+    second would look like an excuse.
+    """
+    return (
+        f"Across all {data['cohort_size']} roles the two orderings correlate at "
+        f"**{data['rank_correlation']}**. That is the aggregate signal, and it "
+        f"is the reason this analysis reports its independent check as "
+        f"inconclusive rather than passed. The published index was built to "
+        f"separate occupations across the whole economy, so inside one family of "
+        f"finance roles it barely varies and its ordering here is driven by "
+        f"small differences. A disagreement against a benchmark that does not "
+        f"discriminate well here is weak evidence about our ranking, and it is "
+        f"not evidence for it either.")
+
+
+def agreement_granularity(data) -> str:
+    return (
+        f"With {data['cohort_size']} roles, one position change moves a rank by "
+        f"{data['granularity']} percentile points, so small gaps on this chart "
+        f"should not be read as meaningful.")
+
+
+# No population count in this sentence, and that is the second time it has been
+# removed. "774" is the benchmark's full occupation count; it has no source in
+# this warehouse, so it was cut from BENCHMARK_ON_FILE earlier in the project and
+# then typed straight back into new copy here. The page scan caught it again.
+# The claim does not need the number.
+BOTH_RANKED_IN_ONE_COHORT = (
+    "Both marks are ranked within these twelve roles and nothing else. The "
+    "published index covers occupations across the whole economy, and a "
+    "position there would describe a different reference set — putting that "
+    "beside ours would compare two populations and look like agreement or "
+    "disagreement when it is neither."
+)
+

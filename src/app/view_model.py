@@ -161,6 +161,13 @@ class CohortView:
     # Typed loosely to keep the view model free of a presentation import.
     ranking_geometry: object = None
 
+    # The two analytical charts, attached by the gateway when their data exists.
+    # Optional because a missing chart is better than a missing page: the
+    # adoption series and the benchmark are separate datasets with separate
+    # failure modes, and neither should take the ranking down with it.
+    adoption: object = None
+    rank_agreement: object = None
+
     @property
     def rows_with_full_run(self) -> tuple[CohortRowView, ...]:
         return tuple(r for r in self.rows if r.has_full_run)

@@ -37,7 +37,8 @@ from app import document
 from app.contract import RefusalReason, RunCost, RunRequest
 from app.style import STYLESHEET
 from app.gateway import (NoCohortAvailable, NoRunAvailable, available_runs,
-                         in_scope_occupations, load_cohort, load_view, submit)
+                         in_scope_occupations, load_portfolio, load_view,
+                         submit)
 from app.view_model import ReportView
 
 PAGE_TITLE = "Task Exposure & Adoption Lag"
@@ -229,7 +230,7 @@ def _render_portfolio() -> None:
     raises instead of returning a short list.
     """
     try:
-        cohort = load_cohort()
+        cohort = load_portfolio()
     except NoCohortAvailable as exc:
         st.info(str(exc))
         return

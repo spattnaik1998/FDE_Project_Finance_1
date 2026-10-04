@@ -31,6 +31,9 @@ LOG = logging.getLogger("app.gateway")
 
 ABSENT = "not identifiable"
 
+# The published benchmark this project calibrates against.
+BENCHMARK_MEASURE = "AIOE_language_modeling"
+
 # Tone per persisted status, so the UI does not have to interpret the
 # vocabulary. 'stop' means the figures must not drive a decision.
 TONE = {
@@ -299,6 +302,10 @@ class NoCohortAvailable(LookupError):
     """No reference set exists for this classifier and rubric."""
 
 
+class NoAdoptionAvailable(LookupError):
+    """No aligned adoption observations exist for the sector."""
+
+
 def load_cohort(*, classifier: str | None = None,
                 database: str | None = None) -> CohortView:
     """The portfolio view: every role in one reference set, ranked.
@@ -433,6 +440,221 @@ def load_cohort(*, classifier: str | None = None,
              DEFAULT_COHORT, classifier, len(cohort_rows),
              view.drillable_roles, tasks_assessed)
     return view
+
+
+# BTOS question codes, named rather than left as numbers in a query. Q7 is
+# current use and Q24 is expected use within six months; the data carries the
+# codes, so the mapping lives here once.
+ADOPTION_QUESTIONS = (("7", "Using AI now"),
+                      ("24", "Expect to within six months"))
+ADOPTION_SECTOR = "52"
+ADOPTION_NOTE = (
+    "Measured for NAICS 52, which pools banking and insurance with securities, "
+    "while the cost line is securities (NAICS 523). Census publishes no "
+    "securities breakout, so this is the finest grain available."
+)
+
+
+def load_adoption(*, database: str | None = None):
+    """The diffusion curve: two aligned series of biweekly observations.
+
+    Returns the geometry plus its own axis note. Both series must share one x
+    axis --- a line chart over two different period sets is two charts --- so the
+    periods are intersected and a period either series is missing is dropped
+    rather than drawn as a gap the reader would read as a dip.
+    """
+    from app import geometry as geom
+    from warehouse.session import Principal, connect
+
+    with connect(Principal.SCORE, database=database) as conn:
+        rows = conn.cursor().execute("""
+            SELECT question_code, period_start, period_label, value
+            FROM core.adoption_observation
+            WHERE is_current = 1 AND sector_code = ?
+              AND answer_label = 'Yes'
+            ORDER BY period_start, question_code""",
+            ADOPTION_SECTOR).fetchall()
+
+    by_question = {code: {} for code, _ in ADOPTION_QUESTIONS}
+    for code, period_start, period_label, value in rows:
+        if code in by_question:
+            by_question[code][period_start] = (period_label, float(value))
+
+    populated = [set(points) for points in by_question.values() if points]
+    shared = (set.intersection(*populated)
+              if len(populated) == len(ADOPTION_QUESTIONS) else set())
+    if not shared:
+        raise NoAdoptionAvailable(
+            f"No aligned adoption observations for sector {ADOPTION_SECTOR}. "
+            f"Load BTOS first: `python scripts/load_warehouse.py`.")
+
+    periods = sorted(shared)
+    series, names = [], []
+    for code, name in ADOPTION_QUESTIONS:
+        points = [(by_question[code][p][0], by_question[code][p][1],
+                   f"{by_question[code][p][1]:.1f}%") for p in periods]
+        series.append((name, points))
+        names.append(name)
+
+    values = [value for _name, points in series for _l, value, _t in points]
+    # A floor at zero would spend three quarters of the plot on empty space; a
+    # floor at the data minimum would exaggerate the slope. Rounded decades
+    # around the data are the compromise, and the axis labels state them.
+    axis_min = float(int(min(values) / 10) * 10)
+    axis_max = float((int(max(values) / 10) + 1) * 10)
+
+    result = geom.lines(series, axis_min=axis_min, axis_max=axis_max)
+    LOG.info("adoption sector=%s periods=%s series=%s axis=%s-%s",
+             ADOPTION_SECTOR, len(periods), len(series), axis_min, axis_max)
+    first_code = ADOPTION_QUESTIONS[0][0]
+    return {
+        "geom": result, "names": tuple(names), "note": ADOPTION_NOTE,
+        "periods": str(len(periods)),
+        "table": {
+            "columns": ("Period",) + tuple(names),
+            "rows": tuple(
+                (by_question[first_code][p][0],)
+                + tuple(f"{by_question[code][p][1]:.1f}%"
+                        for code, _ in ADOPTION_QUESTIONS)
+                for p in periods)}}
+
+
+def load_rank_agreement(*, classifier: str | None = None,
+                        database: str | None = None):
+    """Our rank against the published benchmark's, for every cohort member.
+
+    Both percentiles come from :mod:`scoring.cohort` --- the same ranking the
+    calibration gate uses, not a second implementation beside it. Ranking twice
+    by two methods would let this chart and the gate disagree about the same
+    occupation, and the chart exists to make the gate's argument visible.
+
+    Both series are ranked within **one** cohort, which is the whole point. The
+    benchmark ranks Financial Analysts among 774 occupations across the economy,
+    so its full-population percentile describes a different reference set;
+    putting that beside ours would compare two populations and look like
+    calibration.
+    """
+    from app import geometry as geom
+    from scoring import cohort as cohort_module
+    from scoring.cohort import DEFAULT_COHORT
+    from scoring.run import RUBRIC_VERSION
+    from warehouse.session import Principal, connect
+
+    classifier = classifier or config.MODEL_CLASSIFIER
+
+    with connect(Principal.SCORE, database=database) as conn:
+        cursor = conn.cursor()
+        ours = cohort_module.load_cohort(
+            cursor, cohort_name=DEFAULT_COHORT, classifier=classifier,
+            rubric_version=RUBRIC_VERSION)
+        if not ours:
+            raise NoCohortAvailable(
+                f"No reference set for classifier {classifier!r}. Score the "
+                f"cohort first: "
+                f"`python scripts/score_cohort.py --classifier model --persist`.")
+        benchmarks = cohort_module.load_benchmarks(
+            cursor, socs=list(ours), measure=BENCHMARK_MEASURE)
+        titles = {r[0]: r[1] for r in cursor.execute(
+            "SELECT soc_code, title FROM ref.occupation").fetchall()}
+
+    # Only occupations in BOTH sides enter the cohort. One we scored that the
+    # benchmark does not cover cannot contribute to a comparison, and including
+    # it on one side would shift that side's ranks against a reference set the
+    # other side never saw.
+    members = sorted(set(ours) & set(benchmarks))
+    if len(members) < cohort_module.COHORT_MIN:
+        raise NoCohortAvailable(
+            f"Only {len(members)} occupations are in both our scores and the "
+            f"published benchmark; {cohort_module.COHORT_MIN} are needed to "
+            f"rank within a cohort.")
+
+    calibration = cohort_module.calibrate_within_cohort(
+        members[0], {soc: ours[soc] for soc in members},
+        {soc: benchmarks[soc] for soc in members})
+
+    rows = []
+    for soc in members:
+        detail = calibration.detail[soc]
+        our_pct = cohort_module.percentile_of_rank(
+            detail["our_rank"], len(members))
+        their_pct = cohort_module.percentile_of_rank(
+            detail["benchmark_rank"], len(members))
+        rows.append((titles.get(soc, soc), our_pct, f"{our_pct:.2f}",
+                     their_pct, f"{their_pct:.2f}"))
+
+    rows.sort(key=lambda row: row[1], reverse=True)
+    names = ("Our rank", "Published index")
+    LOG.info("rank_agreement members=%s rho=%s classifier=%s",
+             len(members), calibration.rank_correlation, classifier)
+    return {
+        "geom": geom.dumbbells(rows, axis_max=100.0), "names": names,
+        "cohort_size": str(len(members)),
+        "rank_correlation": (ABSENT if calibration.rank_correlation is None
+                             else f"{calibration.rank_correlation:.4f}"),
+        "granularity": (ABSENT if calibration.granularity_points is None
+                        else f"{calibration.granularity_points:.2f}"),
+        "table": {"columns": ("Role",) + names,
+                  "rows": tuple((row[0], row[2], row[4]) for row in rows)}}
+
+
+def load_portfolio(*, classifier: str | None = None,
+                   database: str | None = None) -> CohortView:
+    """The whole portfolio page in one call: ranking, diffusion, agreement.
+
+    The two analytical charts degrade independently. A missing adoption series
+    or an unrankable benchmark removes that chart and nothing else --- they are
+    separate datasets with separate failure modes, and neither should take the
+    ranking down with it. The ranking itself still raises, because a portfolio
+    view missing rows looks like a portfolio view.
+
+    Their figures are merged into the view's traced set here, in the tier that
+    already holds the provenanced strings, so the page's figure scan covers
+    every chart without any chart being exempted from it.
+    """
+    import dataclasses
+
+    view = load_cohort(classifier=classifier, database=database)
+    figures = set(view.figures)
+
+    adoption = None
+    try:
+        adoption = load_adoption(database=database)
+        figures |= adoption["geom"].figures
+        figures.add(adoption["periods"])
+        # The period labels and the axis ticks are displayed text, so they join
+        # the traced set rather than being exempted from the scan. The labels
+        # are warehouse data (`period_label`); the ticks are scale marks
+        # computed from the series bounds, which is why they are added here, in
+        # the tier that computed them, instead of being waved through as
+        # furniture. An exemption list is how an untraceable number eventually
+        # reaches a chart.
+        figures |= {tick["value"] for tick in adoption["geom"].axis}
+        figures |= {str(cell) for row in adoption["table"]["rows"]
+                    for cell in row}
+        figures |= {"52", "523"}        # NAICS codes named in the axis note
+    except Exception as exc:                     # noqa: BLE001 - degrade, log
+        LOG.warning("portfolio chart=adoption status=absent reason=%s",
+                    f"{type(exc).__name__}: {exc}"[:160])
+
+    agreement = None
+    try:
+        agreement = load_rank_agreement(classifier=classifier,
+                                        database=database)
+        figures |= agreement["geom"].figures
+        figures |= {agreement["cohort_size"], agreement["rank_correlation"],
+                    agreement["granularity"]}
+        # Both signed and unsigned: the number scanner reads "-0.2452" as the
+        # literal "0.2452" with the sign as separate punctuation, so tracing
+        # only the signed form leaves a negative correlation looking untraced.
+        figures.add(agreement["rank_correlation"].lstrip("-"))
+        figures |= {tick["value"] for tick in agreement["geom"].axis}
+    except Exception as exc:                     # noqa: BLE001 - degrade, log
+        LOG.warning("portfolio chart=agreement status=absent reason=%s",
+                    f"{type(exc).__name__}: {exc}"[:160])
+
+    return dataclasses.replace(view, adoption=adoption,
+                               rank_agreement=agreement,
+                               figures=frozenset(figures))
 
 
 def _fmt_lag(value) -> str:

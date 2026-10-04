@@ -307,6 +307,42 @@ Charts 4.2 and 4.3.
 renders twelve rows with both percentiles from the same cohort, and a test fails
 if the two series come from different cohort keys.
 
+**Status: complete.** `gateway.load_adoption`, `gateway.load_rank_agreement` and
+`gateway.load_portfolio`, wired as two sections on the portfolio page. 24 tests in
+`tests/test_dashboard_charts.py`. The page now carries three charts of three
+different forms — bars, lines, dumbbell.
+
+The cohort-key criterion is enforced by bounds rather than by inspection. A
+percentile within a cohort of n is bounded by the midpoint convention
+(`100·0.5/n` to `100·(n−0.5)/n`), so a series ranked in a different population
+cannot respect this cohort's bounds. A companion test proves the check is not
+satisfied trivially: both series must *reach* the cohort's floor and ceiling,
+which a series ranked among 774 occupations would not. Mutation-tested by
+re-ranking the benchmark in its full population.
+
+Both percentiles come from `scoring.cohort` — the same `calibrate_within_cohort`
+and `percentile_of_rank` the gate uses, asserted structurally. Ranking twice by
+two methods would let this chart and the gate disagree about the same occupation,
+and the chart exists to make the gate's argument visible.
+
+**The page scan found five classes of gap and one real defect.** Period labels,
+axis ticks, NAICS codes and the unsigned form of a negative correlation all
+needed tracing (the number scanner reads `-0.2452` as the literal `0.2452`, so
+tracing only the signed form leaves a real figure looking like a provenance
+break). The defect: **`774` was typed into new chart copy** — the benchmark's
+full occupation count, which has no source in this warehouse and which had
+already been removed from `BENCHMARK_ON_FILE` earlier in the project for exactly
+that reason. Removed again, and a test now rejects any figure-shaped literal in
+chart prose.
+
+The two charts degrade independently. A missing adoption series or an unrankable
+benchmark removes that section and logs its own reason; the ranking survives, and
+the ranking itself still raises because a portfolio view missing rows looks like a
+portfolio view.
+
+Two W12 tests broke correctly and were updated rather than relaxed: one asserted
+exactly one chart, the other asserted the UI called `load_cohort`.
+
 *Depends on:* W11.
 
 ### W14 — Interaction and accessibility
